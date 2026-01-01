@@ -1,0 +1,19 @@
+{
+  "name": "vibe-bridge",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "echo 'lint not configured'",
+    "test": "echo 'test not configured'"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
