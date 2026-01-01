@@ -54,6 +54,24 @@ Queued -> Leased -> Running -> Completed/Failed/Canceled
 
 The control plane is the source of truth. A job is safe to retry if the lease expires.
 
+## Job Events (Multi-update)
+
+Some executors (like Vibe Kanban) can emit multiple updates for the same ticket. These should be
+posted as JobEvents while the JobResult remains a single final record.
+
+## Plan -> Execute Gate
+
+Jobs can be split into a plan phase and an execute phase:
+
+1. A plan job runs locally and emits plan text (stored in the control plane).
+2. A human approves the plan in the control plane UI.
+3. The control plane creates an execute job that references the approved plan.
+
+This keeps repo access local while still enabling review and external notifications.
+
+Plan text can be persisted in Postgres for auditability. For large plans, store the body in object
+storage (S3/MinIO) and keep only a reference in the control plane.
+
 ## Protocol (Stable Boundary)
 
 JobSpec and ResultSpec should remain stable so we can add new executors and a Python brain later.

@@ -11,6 +11,10 @@ jobs; the control plane and web UI live in our infrastructure.
 The core idea is simple: keep the runner thin, keep the protocol stable, and keep trust boundaries clear.
 Local tools stay local. The cloud only orchestrates.
 
+Planned workflow addition:
+- Jobs can be split into `plan` and `execute` phases.
+- Plan output is stored in the control plane and can be approved before execution.
+
 Read the deep concept doc here: `docs/CONCEPT.md`.
 
 ## Principles
