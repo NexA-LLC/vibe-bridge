@@ -1,4 +1,4 @@
-export type JobKind = "cli" | "mcp" | "vibeKanban" | "brain";
+export type JobKind = "cli" | "mcp" | "vibeKanban" | "vibeKanban.mcp" | "brain";
 export type JobState = "queued" | "leased" | "running" | "completed" | "failed" | "canceled";
 export type JobPhase = "plan" | "execute";
 

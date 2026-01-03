@@ -76,7 +76,7 @@ storage (S3/MinIO) and keep only a reference in the control plane.
 
 JobSpec and ResultSpec should remain stable so we can add new executors and a Python brain later.
 
-Example JobSpec:
+Example JobSpec (Vibe Kanban create_task):
 
 ```json
 {
@@ -84,9 +84,10 @@ Example JobSpec:
   "tenantId": "t_123",
   "kind": "vibeKanban.mcp",
   "params": {
-    "projectId": "proj_42",
-    "taskId": "task_99",
-    "executor": "codex"
+    "tool": "create_task",
+    "project_id": "proj_42",
+    "title": "[flowlog:0192f08d-1a2b-7c3d-8e4f-123456789abc] Add user profile page",
+    "description": "…"
   },
   "idempotencyKey": "b6b2f38c-8e8e-49b8-8b52-1b4d1f2b0a43",
   "timeoutSec": 1800,
