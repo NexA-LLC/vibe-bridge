@@ -18,6 +18,10 @@ Environment:
 - `VIBE_BRIDGE_PLAN_COMMAND` (optional default plan command)
 - `VIBE_BRIDGE_EXECUTE_COMMAND` (optional default execute command)
 - `VIBE_BRIDGE_VIBE_KANBAN_BASE_URL` (optional, e.g. `http://127.0.0.1:3001`)
+- `VIBE_BRIDGE_FLOWLOG_BASE_URL` (optional; enables Flowlog integrations, e.g. `http://127.0.0.1:4000`)
+- `VIBE_BRIDGE_FLOWLOG_SYNC_TOKEN` (optional; Flowlog sync token for `/api/integrations/*`)
+- `VIBE_BRIDGE_LLM_BASE_URL` / `VIBE_BRIDGE_LLM_API_KEY` / `VIBE_BRIDGE_LLM_MODEL` (optional; OpenAI-compatible `/chat/completions`)
+- `VIBE_BRIDGE_LLM_TIMEOUT_MS` (default 20000)
 
 Plan flow:
 - Job phase `plan` runs `commands.plan` (or env fallback) as a shell command.
@@ -31,3 +35,7 @@ Vibe Kanban flow (job kind `vibeKanban` / `vibeKanban.mcp`):
   - `list_projects`
   - `create_task` (needs `project_id` + `title`, optional `description`)
   - `start_workspace_session` (alias `start_task_attempt`; starts an attempt/workspace, which is when Vibe Kanban creates the git worktree)
+
+Flowlog moyatto hook (optional):
+- When the job includes `params.flowlog.userEmail` and the runner is configured, it generates 1-3 “moyatto” candidates after `create_task`.
+- It posts to Flowlog via `POST /api/integrations/moyatto/manual` (tags include `vk_job:<jobId>` / `vk_task:<taskId>`).

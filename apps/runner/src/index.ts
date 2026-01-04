@@ -10,6 +10,10 @@ import type { JobEvent, JobResult, JobSpec } from "@vibe-bridge/shared";
 
 const MAX_EVENT_MESSAGE = 1800;
 
+type LlmMessage = { role: "system" | "user" | "assistant"; content: string };
+type LlmConfig = { baseUrl: string; apiKey: string; model: string; timeoutMs: number };
+type MoyattoCandidate = { text: string; reason: string };
+
 export interface RunnerConfig {
   apiBaseUrl: string;
   token: string;
@@ -26,6 +30,14 @@ const nowIso = () => new Date().toISOString();
 const trimMessage = (value: string) =>
   value.length > MAX_EVENT_MESSAGE ? `${value.slice(0, MAX_EVENT_MESSAGE)}...` : value;
 
+const resolveEnv = (...keys: string[]) => {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+};
+
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 
@@ -33,6 +45,15 @@ const getString = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+};
+
+const getNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
 };
 
 const postJson = async (baseUrl: string, token: string, pathName: string, payload: unknown) => {
@@ -68,6 +89,254 @@ const getJson = async (baseUrl: string, token: string, pathName: string) => {
 const sanitizeName = (value: string) => value.replace(/[^a-zA-Z0-9-_]/g, "-");
 
 const normalizeBaseUrl = (value: string) => value.replace(/\/+$/, "");
+
+const normalizeLlmBaseUrl = (value: string) => value.replace(/\/$/, "");
+
+const getLlmConfig = (): LlmConfig => {
+  const baseUrl =
+    resolveEnv("VIBE_BRIDGE_LLM_BASE_URL", "FLOWLOG_LLM_BASE_URL", "NEXA_LLM_BASE_URL") ||
+    "http://127.0.0.1:1234/v1";
+  const apiKey = resolveEnv("VIBE_BRIDGE_LLM_API_KEY", "FLOWLOG_LLM_API_KEY", "NEXA_LLM_API_KEY") || "sk-local";
+  const model = resolveEnv("VIBE_BRIDGE_LLM_MODEL", "FLOWLOG_LLM_MODEL", "NEXA_LLM_MODEL") || "auto";
+  const timeoutMs =
+    getNumber(resolveEnv("VIBE_BRIDGE_LLM_TIMEOUT_MS", "FLOWLOG_LLM_TIMEOUT_MS")) ||
+    20000;
+  return { baseUrl: normalizeLlmBaseUrl(baseUrl), apiKey, model, timeoutMs };
+};
+
+const requestChatCompletion = async (messages: LlmMessage[], options: { temperature?: number } = {}) => {
+  const config = getLlmConfig();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages,
+        temperature: options.temperature ?? 0.2,
+      }),
+      signal: controller.signal,
+    });
+    const rawText = await response.text();
+    if (!response.ok) {
+      throw new Error(`LLM request failed ${response.status}: ${rawText}`);
+    }
+    const raw = rawText ? (JSON.parse(rawText) as unknown) : null;
+    let content = "";
+    const rawRecord = asRecord(raw);
+    const choices = rawRecord?.choices;
+    if (Array.isArray(choices) && choices.length > 0) {
+      const firstChoice = asRecord(choices[0]);
+      const message = firstChoice ? asRecord(firstChoice.message) : null;
+      const value = message ? getString(message.content) : undefined;
+      if (value) content = value;
+    }
+    if (!content.trim()) throw new Error("Empty LLM response");
+    return content;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const truncate = (value: string, maxLen: number) => {
+  const text = value.trim();
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, Math.max(0, maxLen - 3)).trim()}...`;
+};
+
+const safeJsonParse = (value: string): unknown => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const stripCodeFences = (value: string) => {
+  let text = value.trim();
+  if (!text.startsWith("```")) return text;
+  text = text.replace(/^```(?:json)?\s*/i, "");
+  text = text.replace(/```\s*$/i, "");
+  return text.trim();
+};
+
+const extractJsonBlock = (value: string): unknown => {
+  const text = value.trim();
+  const pairs = [
+    ["[", "]"],
+    ["{", "}"],
+  ];
+  for (const [startChar, endChar] of pairs) {
+    const start = text.indexOf(startChar);
+    const end = text.lastIndexOf(endChar);
+    if (start === -1 || end === -1 || end <= start) continue;
+    const snippet = text.slice(start, end + 1);
+    const parsed = safeJsonParse(snippet);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+};
+
+const parseCandidateLines = (value: string): MoyattoCandidate[] => {
+  const results: MoyattoCandidate[] = [];
+  for (const raw of value.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const cleaned = line.replace(/^[\-*\d\.\)\(]+\s*/, "");
+    let textPart = "";
+    let reasonPart = "";
+    if (cleaned.includes(" - ")) [textPart, reasonPart] = cleaned.split(" - ", 2);
+    else if (cleaned.includes(" — ")) [textPart, reasonPart] = cleaned.split(" — ", 2);
+    else if (cleaned.includes(":")) [textPart, reasonPart] = cleaned.split(":", 2);
+    else continue;
+    const text = textPart.trim();
+    const reason = reasonPart.trim();
+    if (!text || !reason) continue;
+    results.push({ text, reason });
+    if (results.length >= 3) break;
+  }
+  return results;
+};
+
+const parseCandidates = (content: string): MoyattoCandidate[] => {
+  const cleaned = stripCodeFences(content);
+  const parsed =
+    cleaned.startsWith("[") || cleaned.startsWith("{") ? safeJsonParse(cleaned) : extractJsonBlock(cleaned);
+
+  const takeFromItems = (items: unknown[]): MoyattoCandidate[] => {
+    const out: MoyattoCandidate[] = [];
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const obj = item as Record<string, unknown>;
+      const text = String(obj.text ?? obj.task ?? obj.title ?? "").trim();
+      const reason = String(obj.reason ?? obj.rationale ?? obj.why ?? "").trim();
+      if (!text || !reason) continue;
+      out.push({ text, reason });
+      if (out.length >= 3) break;
+    }
+    return out;
+  };
+
+  if (Array.isArray(parsed)) {
+    const out = takeFromItems(parsed);
+    if (out.length > 0) return out;
+  }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const record = parsed as Record<string, unknown>;
+    for (const key of ["items", "candidates", "suggestions", "tasks"]) {
+      const value = record[key];
+      if (Array.isArray(value)) {
+        const out = takeFromItems(value);
+        if (out.length > 0) return out;
+      }
+    }
+  }
+
+  return parseCandidateLines(cleaned);
+};
+
+const resolveFlowlogConfig = () => {
+  const baseUrl = resolveEnv("VIBE_BRIDGE_FLOWLOG_BASE_URL", "FLOWLOG_BASE_URL") || "";
+  const token = resolveEnv("VIBE_BRIDGE_FLOWLOG_SYNC_TOKEN", "FLOWLOG_SYNC_TOKEN") || "";
+  return {
+    baseUrl: normalizeBaseUrl(baseUrl),
+    token,
+  };
+};
+
+const postMoyattoManual = async (config: { baseUrl: string; token: string }, payload: Record<string, unknown>) => {
+  const res = await fetch(`${config.baseUrl}/api/integrations/moyatto/manual`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "vibe-bridge-runner/0.1",
+    },
+    body: JSON.stringify(payload),
+  });
+  const rawText = await res.text();
+  if (!res.ok) {
+    throw new Error(`Flowlog moyatto failed ${res.status}: ${rawText}`);
+  }
+};
+
+const buildMoyattoMessages = (title: string, description: string | null, taskId: string): LlmMessage[] => {
+  const system = [
+    "You create 1-3 follow-up task candidates after a task is created in Vibe Kanban.",
+    "Return a JSON array of objects with keys text and reason.",
+    "text: short, actionable, one line.",
+    "reason: short and specific.",
+    "Avoid repeating the original task title.",
+    "Do not include markdown or code fences.",
+  ].join(" ");
+  const user = [
+    `Task title: ${title}`,
+    `Description: ${description && description.trim() ? description.trim() : "(none)"}`,
+    `Vibe Kanban task id: ${taskId}`,
+  ].join("\n");
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+};
+
+const maybeEnqueueMoyattoAfterCreateTask = async (
+  runnerConfig: RunnerConfig,
+  job: JobSpec,
+  input: { title: string; description: string | null; taskId: string },
+): Promise<{ status: "skipped" | "ok" | "empty"; posted: number }> => {
+  const params = asRecord(job.params) ?? {};
+  const flowlog = asRecord(params.flowlog) ?? null;
+  const userEmail = flowlog ? getString(flowlog.userEmail) : undefined;
+  if (!userEmail) return { status: "skipped", posted: 0 };
+
+  const flowlogCfg = resolveFlowlogConfig();
+  if (!flowlogCfg.baseUrl || !flowlogCfg.token) {
+    await sendEvent(runnerConfig, job, "status", "Moyatto skipped: missing Flowlog config");
+    return { status: "skipped", posted: 0 };
+  }
+
+  const title = input.title.trim();
+  if (!title) return { status: "skipped", posted: 0 };
+  await sendEvent(runnerConfig, job, "status", "Moyatto: generating candidates");
+
+  const messages = buildMoyattoMessages(title, input.description, input.taskId);
+  const content = await requestChatCompletion(messages, { temperature: 0.2 });
+  const candidates = parseCandidates(content);
+  if (candidates.length === 0) {
+    await sendEvent(runnerConfig, job, "status", "Moyatto: no candidates");
+    return { status: "empty", posted: 0 };
+  }
+
+  const tenantId = job.tenantId;
+  const seen = new Set<string>();
+  let posted = 0;
+  for (const item of candidates) {
+    const text = truncate(item.text, 200);
+    const reason = truncate(item.reason, 200);
+    if (!text || !reason) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const tags = [`reason:${reason}`, `vk_job:${job.id}`, `vk_task:${input.taskId}`];
+    await postMoyattoManual(flowlogCfg, {
+      text,
+      source: "vibe_kanban",
+      tags,
+      externalRef: `vibe-kanban:${job.id}`,
+      tenantId,
+      userEmail,
+    });
+    posted += 1;
+  }
+  await sendEvent(runnerConfig, job, "status", `Moyatto: enqueued ${posted}`);
+  return { status: "ok", posted };
+};
 
 const resolveRepoDir = (workspaceRoot: string, repoUrl: string, tenantId: string, projectId?: string) => {
   const cleanTenant = sanitizeName(tenantId || "default");
@@ -309,11 +578,32 @@ const executeVibeKanbanJob = async (job: JobSpec, config: RunnerConfig): Promise
       });
 
       await sendEvent(config, job, "status", `Vibe Kanban: created task ${task.id}`);
+      let moyattoStatus: string | undefined;
+      let moyattoPosted: number | undefined;
+      let moyattoError: string | undefined;
+      try {
+        const outcome = await maybeEnqueueMoyattoAfterCreateTask(config, job, { title, description, taskId: task.id });
+        moyattoStatus = outcome.status;
+        moyattoPosted = outcome.posted;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        moyattoStatus = "error";
+        moyattoError = truncate(message, 240);
+        try {
+          await sendEvent(config, job, "status", `Moyatto failed: ${message}`);
+        } catch {
+          // ignore
+        }
+      }
+      const artifactsInline: Record<string, string> = { taskId: task.id };
+      if (moyattoStatus) artifactsInline.moyattoStatus = moyattoStatus;
+      if (typeof moyattoPosted === "number") artifactsInline.moyattoPosted = String(moyattoPosted);
+      if (moyattoError) artifactsInline.moyattoError = moyattoError;
       const result: JobResult = {
         jobId: job.id,
         status: "completed",
         finishedAt: nowIso(),
-        artifactsInline: { taskId: task.id },
+        artifactsInline,
       };
       await completeJob(config, result);
       return result;
