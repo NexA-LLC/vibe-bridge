@@ -76,16 +76,6 @@ const ensurePlanPool = async () => {
   if (!planInitPromise) {
     planInitPromise = (async () => {
       planPool = new Pool({ connectionString: DATABASE_URL });
-      await planPool.query(`
-        CREATE TABLE IF NOT EXISTS ${PLAN_TABLE} (
-          job_id TEXT PRIMARY KEY,
-          tenant_id TEXT NOT NULL,
-          project_id TEXT,
-          plan_text TEXT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL
-        )
-      `);
     })();
   }
   await planInitPromise;

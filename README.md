@@ -35,3 +35,19 @@ Read the deep concept doc here: `docs/CONCEPT.md`.
 ## Status
 
 Skeleton only. The goal of this first commit is to lock the concept and structure before code grows.
+
+## Quickstart (dev)
+
+This repo is TypeScript-first. Build once, then run the API and runner.
+
+1) Install deps (once)
+- From `vibe-bridge/`, install workspace dependencies using your usual Node workspace tool (npm/pnpm).
+
+2) Build
+- `npm run build`
+
+3) Run API
+- `API_TOKEN=dev PORT=3900 npm run start:api`
+
+4) Run Runner (in another shell)
+- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path npm run start:runner`

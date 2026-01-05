@@ -14,6 +14,9 @@ Environment:
 - `PLAN_TABLE` (optional, default `vibe_bridge_plans`)
 - `DATABASE_URL` (required when `PLAN_STORAGE_BACKEND=postgres`)
 
+Notes:
+- When `PLAN_STORAGE_BACKEND=postgres`, the plan table must already exist. Create it via your normal human-run DB migration workflow (this repo avoids runtime DDL).
+
 Endpoints:
 - `POST /jobs` (create job)
 - `GET /jobs/next` (lease next job, supports `waitSec`, `leaseTtlSec`, `tenantId`, `kinds`, `phases`)

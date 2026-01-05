@@ -10,6 +10,10 @@
     "node": ">=20"
   },
   "scripts": {
+    "build": "tsc -b",
+    "build:watch": "tsc -b -w",
+    "start:api": "node apps/api/dist/index.js",
+    "start:runner": "node apps/runner/dist/index.js",
     "lint": "echo 'lint not configured'",
     "test": "echo 'test not configured'"
   },
