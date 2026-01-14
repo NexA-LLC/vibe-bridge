@@ -66,11 +66,12 @@ flowchart LR
 - `projectId`: FlowAlign projectId（uuidv7）
 - `phase`: `plan` or `execute`
 - `kind`: 実行先（`mcp` / `cli` / `vibeKanban` / `vibeKanban.mcp`）
-- `idempotencyKey`: **FlowAlign側の Work ID + phase** で冪等化
+- `idempotencyKey`: **FlowAlign側の run ID + phase** で冪等化（Work あたり複数runを許容する）
 - `params`:
   - `source`: `"flowalign"`
   - `flowalignWorkType`: `"candidateMove" | "offer"`
   - `flowalignWorkId`: string
+  - `flowalignOfferRunId?`: Offer の run id（FlowAlignが実行Attemptを識別するため）
   - `targetRunnerId?`: 依頼先 Runner のヒント（FlowAlign が保持する）
   - `runnerSelector?`: 将来用（labels 等）
 
@@ -78,6 +79,9 @@ flowchart LR
 - 入力: CandidateMove（候補手）または Offer（タスク）
 - 出力: `JobResult.artifactsInline.plan`（または `artifacts.plan`）として plan テキストを返す
 - FlowAlign: plan を画面に表示し、**承認（approve）でのみ execute を作る**
+- 実装例:
+  - `kind=brain`: LLMで plan を生成する（例: `apps/brain-py`）
+  - `kind=cli`: ローカルの plan コマンド（codex など）で plan を生成する（runner が実行）
 
 ### 4.3 execute フェーズ（コミットした作業のみ）
 - 入力: 承認済み plan（参照: `params.planJobId` / `params.planText`）
@@ -97,10 +101,10 @@ sequenceDiagram
   participant R as Runner (local)
 
   U->>FA: "この候補手を plan して"（UI操作）
-  FA->>Store: create Dispatch (phase=plan, targetRunnerId?)
+  FA->>Store: append run (phase=plan, targetRunnerId?)
   FA->>VB: POST /jobs (JobSpec phase=plan)
   VB-->>FA: 201 {jobId}
-  FA->>Store: save vibeBridgeJobId on Dispatch
+  FA->>Store: save vibeBridgeJobId on run
 
   R->>VB: GET /jobs/next?waitSec=... (poll)
   VB-->>R: 200 {job, lease}
@@ -170,6 +174,11 @@ classDiagram
   VibeBridgeDispatch "1" --> "0..*" DispatchArtifactRef
 ```
 
+補足（AS-IS / 実装の簡略化）:
+- FlowAlign 側の最小実装では、Dispatch を独立テーブルにせず **Work内に `runs[]` として保持**してもよい
+  - Offer（Work）: `runs[]`（`vibeBridgeJobId` / `planText` / `codexSessionId` など）
+  - 失敗時は同じWorkに新しいrunを追加して再試行する（Workは open のまま）
+
 ## 7. Runner 指定（「どのインスタンスに依頼したか」）
 
 ### 7.1 方針（最小）
@@ -182,4 +191,3 @@ classDiagram
 - FlowAlign → Vibe Bridge API は Bearer token（`API_TOKEN` 等）で保護
 - Runner は inbound port を開けない（pullで lease）
 - **DB（Postgres等）を使う場合は、スキーマ作成/マイグレーションは人間のみ**（このモノレポのルールに従う）
-

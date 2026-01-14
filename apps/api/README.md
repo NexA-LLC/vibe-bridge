@@ -28,4 +28,5 @@ Endpoints:
 
 Suggested webhook endpoints (placeholder):
 - `https://caseflow.example.com/api/integrations/vibe-bridge/plan`
+- `https://flowalign.example.com/api/integrations/vibe-bridge/plan`
 - `https://flowlog.example.com/api/integrations/vibe-bridge/plan`

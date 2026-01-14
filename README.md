@@ -28,6 +28,7 @@ Read the deep concept doc here: `docs/CONCEPT.md`.
 
 - `apps/api`: control plane API (jobs, lease, auth, logs)
 - `apps/runner`: customer-side runner (polling, execution, upload)
+- `apps/brain-py`: optional Python brain runner (plan generation for `kind=brain`)
 - `apps/web`: web UI (history, runners, tokens)
 - `packages/shared`: shared JobSpec/ResultSpec types
 - `docs/`: concept and architecture notes
@@ -51,3 +52,6 @@ This repo is TypeScript-first. Build once, then run the API and runner.
 
 4) Run Runner (in another shell)
 - `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path npm run start:runner`
+
+5) (Optional) Run Brain Runner (plan generation)
+- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev python3 apps/brain-py/brain_runner.py`

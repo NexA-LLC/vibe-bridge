@@ -143,3 +143,7 @@ Executor adapter examples:
 
 A Python brain can be added later for evaluation, retries, and optimization without changing the
 runner protocol. This keeps the system adaptable as AI tooling shifts.
+
+AS-IS:
+- `apps/brain-py` provides a minimal Python “brain runner” that leases `kind=brain` + `phase=plan` jobs
+  and completes them with `artifactsInline.plan` via an OpenAI-compatible `/chat/completions` endpoint.

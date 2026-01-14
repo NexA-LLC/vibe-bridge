@@ -23,6 +23,9 @@ export interface RunnerConfig {
   runnerId?: string;
   defaultPlanCommand?: string;
   defaultExecuteCommand?: string;
+  filterTenantId?: string;
+  filterKinds?: string;
+  filterPhases?: string;
 }
 
 const nowIso = () => new Date().toISOString();
@@ -704,6 +707,9 @@ export const runOnce = async (config: RunnerConfig) => {
     waitSec: "0",
   });
   if (config.runnerId) query.set("runnerId", config.runnerId);
+  if (config.filterTenantId) query.set("tenantId", config.filterTenantId);
+  if (config.filterKinds) query.set("kinds", config.filterKinds);
+  if (config.filterPhases) query.set("phases", config.filterPhases);
   const payload = await getJson(config.apiBaseUrl, config.token, `/jobs/next?${query.toString()}`);
   if (!payload || !payload.job) return false;
   await executeJob(payload.job as JobSpec, config);
@@ -738,6 +744,9 @@ const loadEnvConfig = (): RunnerConfig => {
     runnerId: process.env.VIBE_BRIDGE_RUNNER_ID || undefined,
     defaultPlanCommand: process.env.VIBE_BRIDGE_PLAN_COMMAND || undefined,
     defaultExecuteCommand: process.env.VIBE_BRIDGE_EXECUTE_COMMAND || undefined,
+    filterTenantId: process.env.VIBE_BRIDGE_RUNNER_TENANT_ID || undefined,
+    filterKinds: process.env.VIBE_BRIDGE_RUNNER_KINDS || undefined,
+    filterPhases: process.env.VIBE_BRIDGE_RUNNER_PHASES || undefined,
   };
 };
 
