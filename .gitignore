@@ -4,3 +4,12 @@ dist
 .env
 .env.*
 .DS_Store
+
+# 共通スクリプトセットアップ（環境依存）
+bin/shared/
+auto_commit.command
+auto_commit_multi.command
+clean_codex_branches.command
+clean_codex_branches_multi.command
+clean_vk_worktrees.command
+run_codex.command

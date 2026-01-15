@@ -1,5 +1,8 @@
 # Concept
 
+Japanese docs:
+- `ARCHITECTURE.ja.md`
+
 ## Intent
 
 Vibe Bridge exists to connect internal services to local-only automation without opening inbound ports.

@@ -3,6 +3,10 @@
 Vibe Bridge is a pull-based runner and control plane that bridges internal services to local-only tooling
 (MCP servers, Vibe Kanban, and CLIs) without opening inbound ports.
 
+Japanese docs:
+- `README.ja.md`
+- `docs/ARCHITECTURE.ja.md`
+
 This repo is a Node/TypeScript-first monorepo. The runner lives in customer environments and polls for
 jobs; the control plane and web UI live in our infrastructure.
 
