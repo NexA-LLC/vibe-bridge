@@ -243,31 +243,6 @@ const parseCandidates = (content: string): MoyattoCandidate[] => {
   return parseCandidateLines(cleaned);
 };
 
-const resolveFlowlogConfig = () => {
-  const baseUrl = resolveEnv("VIBE_BRIDGE_FLOWLOG_BASE_URL", "FLOWLOG_BASE_URL") || "";
-  const token = resolveEnv("VIBE_BRIDGE_FLOWLOG_SYNC_TOKEN", "FLOWLOG_SYNC_TOKEN") || "";
-  return {
-    baseUrl: normalizeBaseUrl(baseUrl),
-    token,
-  };
-};
-
-const postMoyattoManual = async (config: { baseUrl: string; token: string }, payload: Record<string, unknown>) => {
-  const res = await fetch(`${config.baseUrl}/api/integrations/moyatto/manual`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json",
-      "User-Agent": "vibe-bridge-runner/0.1",
-    },
-    body: JSON.stringify(payload),
-  });
-  const rawText = await res.text();
-  if (!res.ok) {
-    throw new Error(`Flowlog moyatto failed ${res.status}: ${rawText}`);
-  }
-};
-
 const buildMoyattoMessages = (title: string, description: string | null, taskId: string): LlmMessage[] => {
   const system = [
     "You create 1-3 follow-up task candidates after a task is created in Vibe Kanban.",
@@ -292,20 +267,14 @@ const maybeEnqueueMoyattoAfterCreateTask = async (
   runnerConfig: RunnerConfig,
   job: JobSpec,
   input: { title: string; description: string | null; taskId: string },
-): Promise<{ status: "skipped" | "ok" | "empty"; posted: number }> => {
+): Promise<{ status: "skipped" | "ok" | "empty"; posted: number; candidates: MoyattoCandidate[] }> => {
   const params = asRecord(job.params) ?? {};
   const flowlog = asRecord(params.flowlog) ?? null;
   const userEmail = flowlog ? getString(flowlog.userEmail) : undefined;
-  if (!userEmail) return { status: "skipped", posted: 0 };
-
-  const flowlogCfg = resolveFlowlogConfig();
-  if (!flowlogCfg.baseUrl || !flowlogCfg.token) {
-    await sendEvent(runnerConfig, job, "status", "Moyatto skipped: missing Flowlog config");
-    return { status: "skipped", posted: 0 };
-  }
+  if (!userEmail) return { status: "skipped", posted: 0, candidates: [] };
 
   const title = input.title.trim();
-  if (!title) return { status: "skipped", posted: 0 };
+  if (!title) return { status: "skipped", posted: 0, candidates: [] };
   await sendEvent(runnerConfig, job, "status", "Moyatto: generating candidates");
 
   const messages = buildMoyattoMessages(title, input.description, input.taskId);
@@ -313,12 +282,11 @@ const maybeEnqueueMoyattoAfterCreateTask = async (
   const candidates = parseCandidates(content);
   if (candidates.length === 0) {
     await sendEvent(runnerConfig, job, "status", "Moyatto: no candidates");
-    return { status: "empty", posted: 0 };
+    return { status: "empty", posted: 0, candidates: [] };
   }
 
-  const tenantId = job.tenantId;
   const seen = new Set<string>();
-  let posted = 0;
+  const unique: MoyattoCandidate[] = [];
   for (const item of candidates) {
     const text = truncate(item.text, 200);
     const reason = truncate(item.reason, 200);
@@ -326,19 +294,10 @@ const maybeEnqueueMoyattoAfterCreateTask = async (
     const key = text.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const tags = [`reason:${reason}`, `vk_job:${job.id}`, `vk_task:${input.taskId}`];
-    await postMoyattoManual(flowlogCfg, {
-      text,
-      source: "vibe_kanban",
-      tags,
-      externalRef: `vibe-kanban:${job.id}`,
-      tenantId,
-      userEmail,
-    });
-    posted += 1;
+    unique.push({ text, reason });
   }
-  await sendEvent(runnerConfig, job, "status", `Moyatto: enqueued ${posted}`);
-  return { status: "ok", posted };
+  await sendEvent(runnerConfig, job, "status", `Moyatto: generated ${unique.length}`);
+  return { status: "ok", posted: unique.length, candidates: unique };
 };
 
 const resolveRepoDir = (workspaceRoot: string, repoUrl: string, tenantId: string, projectId?: string) => {
@@ -400,8 +359,91 @@ const sendEvent = async (config: RunnerConfig, job: JobSpec, kind: JobEvent["kin
   await postJson(config.apiBaseUrl, config.token, `/jobs/${job.id}/events`, { event });
 };
 
-const completeJob = async (config: RunnerConfig, result: JobResult) => {
+type JobCallbackSpec = { url: string; headers: Record<string, string>; timeoutMs: number };
+
+const resolveJobCallbackSpec = (job: JobSpec): JobCallbackSpec | null => {
+  const params = asRecord(job.params) ?? {};
+  const raw = asRecord(params.callback) ?? asRecord(params.webhook) ?? null;
+  if (!raw) return null;
+  const url = getString(raw.url);
+  if (!url) return null;
+  const headersRaw = asRecord(raw.headers) ?? {};
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headersRaw)) {
+    const entry = getString(value);
+    if (!entry) continue;
+    headers[key] = entry;
+  }
+  const timeoutMs = getNumber(raw.timeoutMs) || 20000;
+  return { url, headers, timeoutMs };
+};
+
+const postJobCallback = async (spec: JobCallbackSpec, payload: unknown) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), spec.timeoutMs);
+  try {
+    const res = await fetch(spec.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...spec.headers },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const rawText = await res.text();
+    if (!res.ok) {
+      throw new Error(`Callback failed ${res.status}: ${truncate(rawText, 500)}`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const maybeNotifyJobCallback = async (config: RunnerConfig, job: JobSpec, result: JobResult) => {
+  const spec = resolveJobCallbackSpec(job);
+  if (!spec) return;
+
+  const payload = {
+    jobId: job.id,
+    tenantId: job.tenantId,
+    kind: job.kind,
+    phase: job.phase || null,
+    projectId: job.projectId || null,
+    result,
+    runnerId: config.runnerId || null,
+  };
+
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await postJobCallback(spec, payload);
+      try {
+        await sendEvent(config, job, "status", `Callback: ok (${attempt}/${maxAttempts})`);
+      } catch {
+        // ignore
+      }
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt < maxAttempts) {
+        try {
+          await sendEvent(config, job, "status", `Callback retry (${attempt}/${maxAttempts}): ${message}`);
+        } catch {
+          // ignore
+        }
+        await delay(500 * attempt);
+        continue;
+      }
+      try {
+        await sendEvent(config, job, "status", `Callback failed: ${message}`);
+      } catch {
+        // ignore
+      }
+    }
+  }
+};
+
+const completeJob = async (config: RunnerConfig, job: JobSpec, result: JobResult) => {
   await postJson(config.apiBaseUrl, config.token, `/jobs/${result.jobId}/complete`, { result });
+  await maybeNotifyJobCallback(config, job, result).catch(() => null);
 };
 
 const resolveCommand = (job: JobSpec, phase: "plan" | "execute", config: RunnerConfig) => {
@@ -429,7 +471,7 @@ export const executeJob = async (job: JobSpec, config: RunnerConfig): Promise<Jo
       finishedAt: nowIso(),
       errorMessage: `Missing ${phase} command`,
     };
-    await completeJob(config, result);
+    await completeJob(config, job, result);
     return result;
   }
 
@@ -461,7 +503,7 @@ export const executeJob = async (job: JobSpec, config: RunnerConfig): Promise<Jo
     errorMessage: status === "failed" ? stderr || `Command failed with code ${code}` : undefined,
   };
   await sendEvent(config, job, "status", `${phase} finished (${status})`);
-  await completeJob(config, result);
+  await completeJob(config, job, result);
   return result;
 };
 
@@ -556,7 +598,7 @@ const executeVibeKanbanJob = async (job: JobSpec, config: RunnerConfig): Promise
         finishedAt: nowIso(),
         artifactsInline: { projects: JSON.stringify(projects) },
       };
-      await completeJob(config, result);
+      await completeJob(config, job, result);
       return result;
     }
 
@@ -583,11 +625,13 @@ const executeVibeKanbanJob = async (job: JobSpec, config: RunnerConfig): Promise
       await sendEvent(config, job, "status", `Vibe Kanban: created task ${task.id}`);
       let moyattoStatus: string | undefined;
       let moyattoPosted: number | undefined;
+      let moyattoCandidates: MoyattoCandidate[] | undefined;
       let moyattoError: string | undefined;
       try {
         const outcome = await maybeEnqueueMoyattoAfterCreateTask(config, job, { title, description, taskId: task.id });
         moyattoStatus = outcome.status;
         moyattoPosted = outcome.posted;
+        moyattoCandidates = outcome.candidates;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         moyattoStatus = "error";
@@ -601,6 +645,9 @@ const executeVibeKanbanJob = async (job: JobSpec, config: RunnerConfig): Promise
       const artifactsInline: Record<string, string> = { taskId: task.id };
       if (moyattoStatus) artifactsInline.moyattoStatus = moyattoStatus;
       if (typeof moyattoPosted === "number") artifactsInline.moyattoPosted = String(moyattoPosted);
+      if (moyattoCandidates && moyattoCandidates.length > 0) {
+        artifactsInline.moyattoCandidates = JSON.stringify(moyattoCandidates);
+      }
       if (moyattoError) artifactsInline.moyattoError = moyattoError;
       const result: JobResult = {
         jobId: job.id,
@@ -608,7 +655,7 @@ const executeVibeKanbanJob = async (job: JobSpec, config: RunnerConfig): Promise
         finishedAt: nowIso(),
         artifactsInline,
       };
-      await completeJob(config, result);
+      await completeJob(config, job, result);
       return result;
     }
 
@@ -678,7 +725,7 @@ const executeVibeKanbanJob = async (job: JobSpec, config: RunnerConfig): Promise
         finishedAt: nowIso(),
         artifactsInline: { workspaceId: workspace.id, branch: workspace.branch },
       };
-      await completeJob(config, result);
+      await completeJob(config, job, result);
       return result;
     }
 
@@ -696,7 +743,7 @@ const executeVibeKanbanJob = async (job: JobSpec, config: RunnerConfig): Promise
       finishedAt: nowIso(),
       errorMessage: message,
     };
-    await completeJob(config, result);
+    await completeJob(config, job, result);
     return result;
   }
 };

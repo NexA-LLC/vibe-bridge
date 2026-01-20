@@ -62,6 +62,16 @@ The control plane is the source of truth. A job is safe to retry if the lease ex
 Some executors (like Vibe Kanban) can emit multiple updates for the same ticket. These should be
 posted as JobEvents while the JobResult remains a single final record.
 
+## Callbacks (Webhooks)
+
+Jobs may include an optional callback spec in `params.callback` (or `params.webhook`):
+
+- `{url, headers?, timeoutMs?}`
+
+After a job is completed in the control plane, the runner can `POST` a JSON payload containing
+`{jobId, tenantId, kind, phase, projectId, result, runnerId}` to that URL. This is best-effort and
+does not affect the job result in the control plane.
+
 ## Plan -> Execute Gate
 
 Jobs can be split into a plan phase and an execute phase:
