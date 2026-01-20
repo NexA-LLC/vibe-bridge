@@ -38,22 +38,22 @@ Skeleton 〜 MVP 途中。ローカル単体テスト用に、API は `/ui` に�
 ## Quickstart（dev）
 
 1) deps（初回）
-- `vibe-bridge/` で `npm` / `pnpm` などいつものワークスペースツールで依存を入れる
+- `vibe-bridge/` で `pnpm install`
 
 2) build
-- `npm -C vibe-bridge run build`
+- `pnpm run build`
 
 3) API 起動
-- `API_TOKEN=dev PORT=3900 npm -C vibe-bridge run start:api`
+- `API_TOKEN=dev PORT=3900 pnpm run start:api`
 
 3.5) Dev UI を開く
 - `http://127.0.0.1:3900/ui`（`API_TOKEN=dev` の場合は UI 側の Token に `dev` を入れる）
 
 4) Node runner 起動（CLI/MCP/Vibe Kanban 実行用）
-- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path npm -C vibe-bridge run start:runner`
+- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path pnpm run start:runner`
 
 5) （任意）Python brain runner 起動（plan 生成用）
-- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev python3 vibe-bridge/apps/brain-py/brain_runner.py`
+- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev python3 apps/brain-py/brain_runner.py`
 
 補足:
 - brain runner を使う場合、Node runner が `kind=brain` を掴まないように `VIBE_BRIDGE_RUNNER_KINDS` を設定すると安全です（例: `cli,mcp,vibeKanban,vibeKanban.mcp`）。

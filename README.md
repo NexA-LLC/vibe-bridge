@@ -46,19 +46,20 @@ Early MVP. API + runner work for local dev; the API serves a minimal Dev UI at `
 This repo is TypeScript-first. Build once, then run the API and runner.
 
 1) Install deps (once)
-- From `vibe-bridge/`, install workspace dependencies using your usual Node workspace tool (npm/pnpm).
+- From `vibe-bridge/`, install workspace dependencies:
+  - `pnpm install`
 
 2) Build
-- `npm run build`
+- `pnpm run build`
 
 3) Run API
-- `API_TOKEN=dev PORT=3900 npm run start:api`
+- `API_TOKEN=dev PORT=3900 pnpm run start:api`
 
 3.5) Open Dev UI
 - `http://127.0.0.1:3900/ui` (set API Token to `dev` if `API_TOKEN=dev`)
 
 4) Run Runner (in another shell)
-- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path npm run start:runner`
+- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path pnpm run start:runner`
 
 5) (Optional) Run Brain Runner (plan generation)
 - `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev python3 apps/brain-py/brain_runner.py`

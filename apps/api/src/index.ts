@@ -434,14 +434,14 @@ const DEV_UI_HTML = `<!doctype html>
         timer: null,
       };
 
-      const $ = (id) => document.getElementById(id);
+      const byId = (elementId) => document.getElementById(elementId);
 
-      const connStatusEl = $("connStatus");
-      const createStatusEl = $("createStatus");
-      const jobsTbodyEl = $("jobsTbody");
-      const jobDetailEl = $("jobDetail");
-      const jobMetaEl = $("jobMeta");
-      const jobActionsEl = $("jobActions");
+      const connStatusEl = byId("connStatus");
+      const createStatusEl = byId("createStatus");
+      const jobsTbodyEl = byId("jobsTbody");
+      const jobDetailEl = byId("jobDetail");
+      const jobMetaEl = byId("jobMeta");
+      const jobActionsEl = byId("jobActions");
 
       const setStatus = (el, text, kind) => {
         el.textContent = text;
@@ -476,14 +476,14 @@ const DEV_UI_HTML = `<!doctype html>
           const parsed = JSON.parse(trimmed);
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Params must be an object");
           return parsed;
-        } catch (e) {
-          throw new Error(\`Invalid JSON: \${e && e.message ? e.message : String(e)}\`);
+        } catch (error) {
+          throw new Error(\`Invalid JSON: \${error && error.message ? error.message : String(error)}\`);
         }
       };
 
       const saveConn = () => {
-        state.apiBase = ($("apiBase").value || "").trim() || location.origin;
-        state.apiToken = ($("apiToken").value || "").trim();
+        state.apiBase = (byId("apiBase").value || "").trim() || location.origin;
+        state.apiToken = (byId("apiToken").value || "").trim();
         storage.set("vb_api_base", state.apiBase);
         storage.set("vb_api_token", state.apiToken);
         setStatus(connStatusEl, \`Saved. Using \${state.apiBase}\`, "ok");
@@ -519,8 +519,8 @@ const DEV_UI_HTML = `<!doctype html>
           const data = await apiFetch("/jobs?limit=200");
           renderJobs((data && data.jobs) || []);
           setStatus(connStatusEl, \`Loaded \${((data && data.jobs) || []).length} jobs\`, "ok");
-        } catch (e) {
-          setStatus(connStatusEl, e.message || String(e), "error");
+        } catch (error) {
+          setStatus(connStatusEl, error.message || String(error), "error");
         }
       };
 
@@ -547,26 +547,26 @@ const DEV_UI_HTML = `<!doctype html>
           ].filter(Boolean).join("  ");
           jobMetaEl.textContent = meta;
           jobDetailEl.textContent = JSON.stringify(job, null, 2);
-        } catch (e) {
+        } catch (error) {
           jobMetaEl.textContent = "";
           jobDetailEl.textContent = "";
-          setStatus(connStatusEl, e.message || String(e), "error");
+          setStatus(connStatusEl, error.message || String(error), "error");
         }
       };
 
       const createJob = async () => {
         try {
           setStatus(createStatusEl, "Creating...", null);
-          const tenantId = ($("tenantId").value || "").trim() || "default";
-          const kind = $("kind").value;
-          const phase = $("phase").value;
-          const planCommand = ($("planCommand").value || "").trim();
-          const executeCommand = ($("executeCommand").value || "").trim();
-          const repoUrl = ($("repoUrl").value || "").trim();
-          const repoRef = ($("repoRef").value || "").trim();
-          const repoSubdir = ($("repoSubdir").value || "").trim();
-          const callbackUrl = ($("callbackUrl").value || "").trim();
-          const params = parseJsonOrThrow($("params").value);
+          const tenantId = (byId("tenantId").value || "").trim() || "default";
+          const kind = byId("kind").value;
+          const phase = byId("phase").value;
+          const planCommand = (byId("planCommand").value || "").trim();
+          const executeCommand = (byId("executeCommand").value || "").trim();
+          const repoUrl = (byId("repoUrl").value || "").trim();
+          const repoRef = (byId("repoRef").value || "").trim();
+          const repoSubdir = (byId("repoSubdir").value || "").trim();
+          const callbackUrl = (byId("callbackUrl").value || "").trim();
+          const params = parseJsonOrThrow(byId("params").value);
 
           if (callbackUrl) {
             params.callback = { url: callbackUrl };
@@ -593,8 +593,8 @@ const DEV_UI_HTML = `<!doctype html>
           setStatus(createStatusEl, \`Created job \${created.id}\`, "ok");
           await refreshJobs();
           await loadJob(created.id);
-        } catch (e) {
-          setStatus(createStatusEl, e.message || String(e), "error");
+        } catch (error) {
+          setStatus(createStatusEl, error.message || String(error), "error");
         }
       };
 
@@ -602,7 +602,7 @@ const DEV_UI_HTML = `<!doctype html>
         if (!state.selectedJobId) return;
         try {
           setStatus(connStatusEl, approved ? "Approving..." : "Rejecting...", null);
-          const executeCommand = ($("executeCommand").value || "").trim();
+          const executeCommand = (byId("executeCommand").value || "").trim();
           const payload = approved
             ? {
                 approved: true,
@@ -618,8 +618,8 @@ const DEV_UI_HTML = `<!doctype html>
           await refreshJobs();
           await loadJob(resp.plan.id);
           if (resp.executeJob && resp.executeJob.id) await loadJob(resp.executeJob.id);
-        } catch (e) {
-          setStatus(connStatusEl, e.message || String(e), "error");
+        } catch (error) {
+          setStatus(connStatusEl, error.message || String(error), "error");
         }
       };
 
@@ -635,21 +635,21 @@ const DEV_UI_HTML = `<!doctype html>
         }, 2000);
       };
 
-      $("apiBase").value = state.apiBase;
-      $("apiToken").value = state.apiToken;
-      $("autoRefresh").checked = state.autoRefresh;
+      byId("apiBase").value = state.apiBase;
+      byId("apiToken").value = state.apiToken;
+      byId("autoRefresh").checked = state.autoRefresh;
 
-      $("saveConn").addEventListener("click", () => saveConn());
-      $("refreshJobs").addEventListener("click", () => refreshJobs());
-      $("createJob").addEventListener("click", () => createJob());
-      $("fillEcho").addEventListener("click", () => {
-        $("kind").value = "cli";
-        $("phase").value = "execute";
-        $("executeCommand").value = "echo hello";
+      byId("saveConn").addEventListener("click", () => saveConn());
+      byId("refreshJobs").addEventListener("click", () => refreshJobs());
+      byId("createJob").addEventListener("click", () => createJob());
+      byId("fillEcho").addEventListener("click", () => {
+        byId("kind").value = "cli";
+        byId("phase").value = "execute";
+        byId("executeCommand").value = "echo hello";
       });
-      $("approvePlan").addEventListener("click", () => approvePlan(true));
-      $("rejectPlan").addEventListener("click", () => approvePlan(false));
-      $("autoRefresh").addEventListener("change", (e) => setAutoRefresh(e.target.checked));
+      byId("approvePlan").addEventListener("click", () => approvePlan(true));
+      byId("rejectPlan").addEventListener("click", () => approvePlan(false));
+      byId("autoRefresh").addEventListener("change", (event) => setAutoRefresh(event.target.checked));
 
       saveConn();
       refreshJobs().catch(() => {});
@@ -853,11 +853,11 @@ const server = http.createServer(async (req, res) => {
           error(res, 400, "Missing execute command");
           return;
         }
-        const nextParams = {
+        const nextParams: Record<string, unknown> = {
           ...(job.params || {}),
           planJobId: job.id,
         };
-        if (job.planText) nextParams.planText = job.planText;
+        if (job.planText) nextParams["planText"] = job.planText;
         executeJob = createJob({
           tenantId: job.tenantId,
           kind: job.kind,
