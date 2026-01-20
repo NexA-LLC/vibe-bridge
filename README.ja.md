@@ -27,13 +27,13 @@ pull 型の control plane + runner です。
 - `apps/api`: control plane API（jobs / lease / logs / plan approval）
 - `apps/runner`: runner（CLI/MCP/Vibe Kanban 実行）
 - `apps/brain-py`: Python brain runner（`kind=brain` の plan 生成）
-- `apps/web`: Web UI（将来用 / まだ薄い）
+- `apps/web`: Web UI（将来用 / まだ薄い。現状は `apps/api` が `/ui` に簡易 Dev UI を同梱）
 - `packages/shared`: JobSpec/Result の型（TS）
 - `docs/`: 概念・連携仕様
 
 ## Status
 
-Skeleton 〜 MVP 途中。UI は後回しで、まずは FlowAlign など既存の UI から Job を投入して回す。
+Skeleton 〜 MVP 途中。ローカル単体テスト用に、API は `/ui` に簡易 Dev UI を同梱。
 
 ## Quickstart（dev）
 
@@ -46,6 +46,9 @@ Skeleton 〜 MVP 途中。UI は後回しで、まずは FlowAlign など既存�
 3) API 起動
 - `API_TOKEN=dev PORT=3900 npm -C vibe-bridge run start:api`
 
+3.5) Dev UI を開く
+- `http://127.0.0.1:3900/ui`（`API_TOKEN=dev` の場合は UI 側の Token に `dev` を入れる）
+
 4) Node runner 起動（CLI/MCP/Vibe Kanban 実行用）
 - `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path npm -C vibe-bridge run start:runner`
 
@@ -54,4 +57,3 @@ Skeleton 〜 MVP 途中。UI は後回しで、まずは FlowAlign など既存�
 
 補足:
 - brain runner を使う場合、Node runner が `kind=brain` を掴まないように `VIBE_BRIDGE_RUNNER_KINDS` を設定すると安全です（例: `cli,mcp,vibeKanban,vibeKanban.mcp`）。
-

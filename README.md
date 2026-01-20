@@ -33,13 +33,13 @@ Read the deep concept doc here: `docs/CONCEPT.md`.
 - `apps/api`: control plane API (jobs, lease, auth, logs)
 - `apps/runner`: customer-side runner (polling, execution, upload)
 - `apps/brain-py`: optional Python brain runner (plan generation for `kind=brain`)
-- `apps/web`: web UI (history, runners, tokens)
+- `apps/web`: web UI (future; dev UI is currently served by `apps/api` at `/ui`)
 - `packages/shared`: shared JobSpec/ResultSpec types
 - `docs/`: concept and architecture notes
 
 ## Status
 
-Skeleton only. The goal of this first commit is to lock the concept and structure before code grows.
+Early MVP. API + runner work for local dev; the API serves a minimal Dev UI at `/ui`.
 
 ## Quickstart (dev)
 
@@ -53,6 +53,9 @@ This repo is TypeScript-first. Build once, then run the API and runner.
 
 3) Run API
 - `API_TOKEN=dev PORT=3900 npm run start:api`
+
+3.5) Open Dev UI
+- `http://127.0.0.1:3900/ui` (set API Token to `dev` if `API_TOKEN=dev`)
 
 4) Run Runner (in another shell)
 - `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path npm run start:runner`

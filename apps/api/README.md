@@ -18,7 +18,9 @@ Notes:
 - When `PLAN_STORAGE_BACKEND=postgres`, the plan table must already exist. Create it via your normal human-run DB migration workflow (this repo avoids runtime DDL).
 
 Endpoints:
+- `GET /ui` (minimal Dev UI for local testing)
 - `POST /jobs` (create job)
+- `GET /jobs` (list jobs; supports `tenantId`, `kinds`, `phases`, `states`, `limit`)
 - `GET /jobs/next` (lease next job, supports `waitSec`, `leaseTtlSec`, `tenantId`, `kinds`, `phases`)
 - `GET /jobs/:id` (inspect job)
 - `POST /jobs/:id/heartbeat` (extend lease)
