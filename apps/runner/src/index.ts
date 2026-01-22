@@ -23,6 +23,8 @@ export interface RunnerConfig {
   runnerId?: string;
   defaultPlanCommand?: string;
   defaultExecuteCommand?: string;
+  flowlogQueueBaseUrl?: string;
+  flowlogQueueToken?: string;
   filterTenantId?: string;
   filterKinds?: string;
   filterPhases?: string;
@@ -92,6 +94,141 @@ const getJson = async (baseUrl: string, token: string, pathName: string) => {
 const sanitizeName = (value: string) => value.replace(/[^a-zA-Z0-9-_]/g, "-");
 
 const normalizeBaseUrl = (value: string) => value.replace(/\/+$/, "");
+
+type FlowlogQueueCallback = { url: string; headers: Record<string, string> };
+
+type FlowlogQueueTask = {
+  id: string;
+  tenantId: string;
+  userEmail: string;
+  kind: string;
+  request: Record<string, unknown>;
+  callback: FlowlogQueueCallback | null;
+};
+
+const normalizeFlowlogQueueCallback = (value: unknown): FlowlogQueueCallback | null => {
+  const record = asRecord(value);
+  if (!record) return null;
+  const url = getString(record.url);
+  if (!url) return null;
+  const headersRaw = asRecord(record.headers) ?? {};
+  const headers: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(headersRaw)) {
+    const text = getString(entry);
+    if (!text) continue;
+    headers[key] = text;
+  }
+  return { url, headers };
+};
+
+const normalizeFlowlogQueueTask = (value: unknown): FlowlogQueueTask | null => {
+  const record = asRecord(value);
+  if (!record) return null;
+  const id = getString(record.id);
+  const tenantId = getString(record.tenantId);
+  const kind = getString(record.kind);
+  if (!id || !tenantId || !kind) return null;
+  const userEmail = getString(record.userEmail) || "";
+  const request = asRecord(record.request) ?? {};
+  const callback = normalizeFlowlogQueueCallback(record.callback);
+  return { id, tenantId, userEmail, kind, request, callback };
+};
+
+const normalizeFlowlogQueueTasks = (value: unknown): FlowlogQueueTask[] => {
+  const record = asRecord(value);
+  const tasksRaw = record?.tasks;
+  if (!Array.isArray(tasksRaw)) return [];
+  const out: FlowlogQueueTask[] = [];
+  for (const entry of tasksRaw) {
+    const task = normalizeFlowlogQueueTask(entry);
+    if (!task) continue;
+    out.push(task);
+  }
+  return out;
+};
+
+const notifyFlowlogQueueCallback = async (
+  task: FlowlogQueueTask,
+  config: RunnerConfig,
+  result: JobResult,
+): Promise<void> => {
+  if (!task.callback) throw new Error("Missing callback");
+  const spec: JobCallbackSpec = { url: task.callback.url, headers: task.callback.headers, timeoutMs: 20000 };
+  const payload = {
+    jobId: task.id,
+    tenantId: task.tenantId,
+    kind: `flowlogQueue:${task.kind}`,
+    phase: null,
+    projectId: null,
+    result,
+    runnerId: config.runnerId || null,
+  };
+
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await postJobCallback(spec, payload);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt >= maxAttempts) throw error;
+      console.warn(`[flowlog-queue] callback retry (${attempt}/${maxAttempts}): ${message}`);
+      await delay(500 * attempt);
+    }
+  }
+};
+
+const executeFlowlogQueueTask = async (task: FlowlogQueueTask, config: RunnerConfig): Promise<void> => {
+  const runnerId = config.runnerId || os.hostname();
+  const artifactsInline: Record<string, string> = { runnerId };
+
+  try {
+    if (task.kind === "timeline_post") {
+      const line = getString(task.request.line);
+      if (!line) throw new Error("Missing request.line");
+
+      const result: JobResult = {
+        jobId: task.id,
+        status: "completed",
+        finishedAt: nowIso(),
+        artifactsInline,
+      };
+      await notifyFlowlogQueueCallback(task, config, result);
+      return;
+    }
+
+    throw new Error(`Unknown Flowlog queue task kind: ${task.kind}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const result: JobResult = {
+      jobId: task.id,
+      status: "failed",
+      finishedAt: nowIso(),
+      artifactsInline,
+      errorMessage: message,
+    };
+    try {
+      await notifyFlowlogQueueCallback(task, config, result);
+    } catch (notifyError) {
+      console.error("[flowlog-queue] callback failed", notifyError);
+    }
+  }
+};
+
+const runFlowlogQueueOnce = async (config: RunnerConfig): Promise<boolean> => {
+  const baseUrl = config.flowlogQueueBaseUrl;
+  const token = config.flowlogQueueToken;
+  if (!baseUrl || !token) return false;
+
+  const workerId = config.runnerId || os.hostname();
+  const payload = await postJson(baseUrl, token, "/api/integrations/vibe-bridge/jobs/claim", { workerId, limit: 1 });
+  const tasks = normalizeFlowlogQueueTasks(payload);
+  if (tasks.length === 0) return false;
+  for (const task of tasks) {
+    await executeFlowlogQueueTask(task, config);
+  }
+  return true;
+};
 
 const normalizeLlmBaseUrl = (value: string) => value.replace(/\/$/, "");
 
@@ -763,10 +900,16 @@ export const runOnce = async (config: RunnerConfig) => {
   return true;
 };
 
+const runBridgeOrFlowlogOnce = async (config: RunnerConfig): Promise<boolean> => {
+  const handled = await runOnce(config);
+  if (handled) return true;
+  return runFlowlogQueueOnce(config);
+};
+
 export const runLoop = async (config: RunnerConfig) => {
   while (true) {
     try {
-      const handled = await runOnce(config);
+      const handled = await runBridgeOrFlowlogOnce(config);
       if (!handled) await delay((config.pollIntervalSec || 5) * 1000);
     } catch (error) {
       console.error("[vibe-bridge] runner error", error);
@@ -791,6 +934,8 @@ const loadEnvConfig = (): RunnerConfig => {
     runnerId: process.env.VIBE_BRIDGE_RUNNER_ID || undefined,
     defaultPlanCommand: process.env.VIBE_BRIDGE_PLAN_COMMAND || undefined,
     defaultExecuteCommand: process.env.VIBE_BRIDGE_EXECUTE_COMMAND || undefined,
+    flowlogQueueBaseUrl: resolveEnv("FLOWLOG_VIBE_BRIDGE_QUEUE_BASE_URL"),
+    flowlogQueueToken: resolveEnv("FLOWLOG_SYNC_TOKEN"),
     filterTenantId: process.env.VIBE_BRIDGE_RUNNER_TENANT_ID || undefined,
     filterKinds: process.env.VIBE_BRIDGE_RUNNER_KINDS || undefined,
     filterPhases: process.env.VIBE_BRIDGE_RUNNER_PHASES || undefined,

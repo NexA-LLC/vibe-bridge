@@ -16,7 +16,7 @@
   - 1行=1件（JSON Lines）。
   - `id` は UUIDv7。
   - `deps` は依存する TODO の `id` 配列（推測で付けない）。
-- `todo.md` は互換/閲覧用（legacy view）とし、原則として更新しない（必要なら `todos.jsonl` を直す）。
+- 旧 Markdown TODO は廃止し、`todos.jsonl` のみ運用する。
 
 ### `todos.jsonl` のスキーマ（最小）
 - 必須: `id`, `state`, `group`, `text`

@@ -23,6 +23,8 @@ Environment:
 - `VIBE_BRIDGE_VIBE_KANBAN_BASE_URL` (optional, e.g. `http://127.0.0.1:3001`)
 - `VIBE_BRIDGE_LLM_BASE_URL` / `VIBE_BRIDGE_LLM_API_KEY` / `VIBE_BRIDGE_LLM_MODEL` (optional; OpenAI-compatible `/chat/completions`)
 - `VIBE_BRIDGE_LLM_TIMEOUT_MS` (default 20000)
+- `FLOWLOG_VIBE_BRIDGE_QUEUE_BASE_URL` (optional; enables Flowlog queue polling)
+- `FLOWLOG_SYNC_TOKEN` (required when Flowlog queue is enabled)
 
 Plan flow:
 - Job phase `plan` runs `commands.plan` (or env fallback) as a shell command.
