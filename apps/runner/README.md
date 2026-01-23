@@ -25,6 +25,8 @@ Environment:
 - `VIBE_BRIDGE_LLM_TIMEOUT_MS` (default 20000)
 - `FLOWLOG_VIBE_BRIDGE_QUEUE_BASE_URL` (optional; enables Flowlog queue polling)
 - `FLOWLOG_SYNC_TOKEN` (required when Flowlog queue is enabled)
+- `FLOWALIGN_VIBE_BRIDGE_QUEUE_BASE_URL` (optional; enables FlowAlign queue polling)
+- `FLOWALIGN_VIBE_BRIDGE_QUEUE_TOKEN` (required when FlowAlign queue is enabled; should match FlowAlign `FLOWALIGN_VIBE_BRIDGE_WEBHOOK_TOKEN`)
 
 Plan flow:
 - Job phase `plan` runs `commands.plan` (or env fallback) as a shell command.

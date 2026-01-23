@@ -48,18 +48,20 @@ flowchart LR
   end
 
   FAUI --> FAAPI --> FASTORE
-  FAAPI -->|create JobSpec| VBAPI
+  FAAPI -->|enqueue JobSpec| FASTORE
+  R -->|claim JobSpec| FAAPI
+  R -->|POST /jobs| VBAPI
   VBAPI -->|lease JobSpec| R
   R -->|execute| MCP
   R -->|execute| CLI
   R -->|execute| VK
   R -->|events/result| VBAPI
   VBWEB --> VBAPI
-  FAAPI -->|poll or webhook| VBAPI
+  R -->|callback (result)| FAAPI
   FAAPI -->|attach refs| FASTORE
 ```
 
-## 4. JobSpec の写像（FlowAlign → Vibe Bridge）
+## 4. JobSpec の写像（FlowAlign（queue）→ Vibe Bridge）
 
 ### 4.1 最小の JobSpec（共通）
 - `tenantId`: FlowAlign tenantId
@@ -101,18 +103,18 @@ sequenceDiagram
   participant R as Runner (local)
 
   U->>FA: "この候補手を plan して"（UI操作）
-  FA->>Store: append run (phase=plan, targetRunnerId?)
-  FA->>VB: POST /jobs (JobSpec phase=plan)
-  VB-->>FA: 201 {jobId}
-  FA->>Store: save vibeBridgeJobId on run
+  FA->>Store: append run (phase=plan, targetRunnerId?) + enqueue JobSpec
+
+  R->>FA: POST /api/integrations/vibe-bridge/jobs/claim
+  FA-->>R: 200 {tasks:[JobSpec]}
+  R->>VB: POST /jobs (create local job)
 
   R->>VB: GET /jobs/next?waitSec=... (poll)
   VB-->>R: 200 {job, lease}
   R->>VB: POST /jobs/{jobId}/events (logs/status)
   R->>VB: POST /jobs/{jobId}/complete (ResultSpec with plan)
-  VB-->>FA: (option A) webhook: plan ready
-  FA->>VB: (option B) GET /jobs/{jobId} (poll)
-  FA->>Store: attach plan text / planRef to the Work
+  R-->>FA: callback: plan ready (params.callback)
+  FA->>Store: attach plan text / codexSessionId to the Work
   U-->>FA: plan確認（UI）
 ```
 
@@ -127,16 +129,18 @@ sequenceDiagram
   participant VB as Vibe Bridge API
   participant R as Runner (local)
 
-  U->>FA: plan承認（execute作成）
-  FA->>VB: POST /jobs/{planJobId}/approve {approved:true, createExecuteJob:true}
-  VB-->>FA: 200 {executeJobId}
-  FA->>Store: link executeJobId
+  U->>FA: plan承認（execute enqueue）
+  FA->>Store: mark approved + enqueue JobSpec(phase=execute)
+
+  R->>FA: POST /api/integrations/vibe-bridge/jobs/claim
+  FA-->>R: 200 {tasks:[JobSpec(execute)]}
+  R->>VB: POST /jobs (create local execute job)
 
   R->>VB: GET /jobs/next (poll)
   VB-->>R: 200 {job(execute), lease}
   R->>VB: POST /jobs/{jobId}/events (logs)
   R->>VB: POST /jobs/{jobId}/complete (result)
-  FA->>VB: GET /jobs/{executeJobId}
+  R-->>FA: callback: execute finished (params.callback)
   FA->>Store: attach artifacts/log refs
 ```
 
@@ -188,6 +192,8 @@ classDiagram
 
 ## 8. セキュリティ / 運用メモ
 
-- FlowAlign → Vibe Bridge API は Bearer token（`API_TOKEN` 等）で保護
+- FlowAlign は Vibe Bridge のローカル API を直接叩かない（inbound できないため）
+- Runner → FlowAlign（queue claim / callback）は Bearer token で保護する（FlowAlign 側の `FLOWALIGN_VIBE_BRIDGE_WEBHOOK_TOKEN(S)` 等）
+- Runner → Vibe Bridge API はローカル（`VIBE_BRIDGE_API_TOKEN` 等）で保護する
 - Runner は inbound port を開けない（pullで lease）
 - **DB（Postgres等）を使う場合は、スキーマ作成/マイグレーションは人間のみ**（このモノレポのルールに従う）

@@ -25,6 +25,8 @@ export interface RunnerConfig {
   defaultExecuteCommand?: string;
   flowlogQueueBaseUrl?: string;
   flowlogQueueToken?: string;
+  flowalignQueueBaseUrl?: string;
+  flowalignQueueToken?: string;
   filterTenantId?: string;
   filterKinds?: string;
   filterPhases?: string;
@@ -226,6 +228,90 @@ const runFlowlogQueueOnce = async (config: RunnerConfig): Promise<boolean> => {
   if (tasks.length === 0) return false;
   for (const task of tasks) {
     await executeFlowlogQueueTask(task, config);
+  }
+  return true;
+};
+
+const isNotFoundError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith("Request failed 404:");
+};
+
+const normalizeFlowalignQueueJobs = (value: unknown): JobSpec[] => {
+  const record = asRecord(value);
+  const tasksRaw = record?.tasks;
+  if (!Array.isArray(tasksRaw)) return [];
+
+  const out: JobSpec[] = [];
+  for (const entry of tasksRaw) {
+    const task = asRecord(entry);
+    if (!task) continue;
+    const id = getString(task.id);
+    const tenantId = getString(task.tenantId);
+    const kind = getString(task.kind);
+    if (!id || !tenantId || !kind) continue;
+
+    const requestedAt = getString(task.requestedAt) || nowIso();
+    const params = asRecord(task.params) ?? {};
+
+    const repoRaw = asRecord(task.repo);
+    const repoUrl = getString(repoRaw?.url);
+    const repo = repoUrl
+      ? {
+          url: repoUrl,
+          ref: getString(repoRaw?.ref),
+          subdir: getString(repoRaw?.subdir),
+        }
+      : undefined;
+
+    const commandsRaw = asRecord(task.commands);
+    const plan = getString(commandsRaw?.plan);
+    const execute = getString(commandsRaw?.execute);
+    const commands = plan || execute ? { plan, execute } : undefined;
+
+    const job: JobSpec = {
+      id,
+      tenantId,
+      kind: kind as JobSpec["kind"],
+      phase: getString(task.phase) as JobSpec["phase"],
+      projectId: getString(task.projectId),
+      repo,
+      commands,
+      planOutputPath: getString(task.planOutputPath),
+      context: getString(task.context),
+      params,
+      idempotencyKey: getString(task.idempotencyKey),
+      timeoutSec: getNumber(task.timeoutSec),
+      requestedAt,
+    };
+
+    out.push(job);
+  }
+
+  return out;
+};
+
+const ensureControlPlaneJob = async (job: JobSpec, config: RunnerConfig): Promise<void> => {
+  try {
+    await getJson(config.apiBaseUrl, config.token, `/jobs/${encodeURIComponent(job.id)}`);
+    return;
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+  }
+  await postJson(config.apiBaseUrl, config.token, "/jobs", job);
+};
+
+const runFlowalignQueueOnce = async (config: RunnerConfig): Promise<boolean> => {
+  const baseUrl = config.flowalignQueueBaseUrl;
+  const token = config.flowalignQueueToken;
+  if (!baseUrl || !token) return false;
+
+  const workerId = config.runnerId || os.hostname();
+  const payload = await postJson(baseUrl, token, "/api/integrations/vibe-bridge/jobs/claim", { workerId, limit: 1 });
+  const tasks = normalizeFlowalignQueueJobs(payload);
+  if (tasks.length === 0) return false;
+  for (const task of tasks) {
+    await ensureControlPlaneJob(task, config);
   }
   return true;
 };
@@ -903,7 +989,9 @@ export const runOnce = async (config: RunnerConfig) => {
 const runBridgeOrFlowlogOnce = async (config: RunnerConfig): Promise<boolean> => {
   const handled = await runOnce(config);
   if (handled) return true;
-  return runFlowlogQueueOnce(config);
+  const handledFlowlog = await runFlowlogQueueOnce(config);
+  if (handledFlowlog) return true;
+  return runFlowalignQueueOnce(config);
 };
 
 export const runLoop = async (config: RunnerConfig) => {
@@ -936,6 +1024,8 @@ const loadEnvConfig = (): RunnerConfig => {
     defaultExecuteCommand: process.env.VIBE_BRIDGE_EXECUTE_COMMAND || undefined,
     flowlogQueueBaseUrl: resolveEnv("FLOWLOG_VIBE_BRIDGE_QUEUE_BASE_URL"),
     flowlogQueueToken: resolveEnv("FLOWLOG_SYNC_TOKEN"),
+    flowalignQueueBaseUrl: resolveEnv("FLOWALIGN_VIBE_BRIDGE_QUEUE_BASE_URL"),
+    flowalignQueueToken: resolveEnv("FLOWALIGN_VIBE_BRIDGE_QUEUE_TOKEN", "FLOWALIGN_VIBE_BRIDGE_WEBHOOK_TOKEN"),
     filterTenantId: process.env.VIBE_BRIDGE_RUNNER_TENANT_ID || undefined,
     filterKinds: process.env.VIBE_BRIDGE_RUNNER_KINDS || undefined,
     filterPhases: process.env.VIBE_BRIDGE_RUNNER_PHASES || undefined,

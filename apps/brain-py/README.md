@@ -33,7 +33,9 @@ python3 vibe-bridge/apps/brain-py/brain_runner.py --poll-interval-sec 2
 ```
 
 To receive jobs from FlowAlign, set FlowAlign’s `FLOWALIGN_VIBE_BRIDGE_DEFAULT_KIND=brain`
-and point `FLOWALIGN_VIBE_BRIDGE_API_BASE_URL` at the control plane.
+and run the Node runner with FlowAlign queue polling enabled
+(`FLOWALIGN_VIBE_BRIDGE_QUEUE_BASE_URL` + `FLOWALIGN_VIBE_BRIDGE_QUEUE_TOKEN`) so it can pull jobs from FlowAlign
+and create them on the local control plane.
 
 If you run the Node runner at the same time, configure it to not lease `kind=brain` jobs
 (e.g. `VIBE_BRIDGE_RUNNER_KINDS=cli,mcp,vibeKanban,vibeKanban.mcp`).
