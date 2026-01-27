@@ -14,6 +14,23 @@ type LlmMessage = { role: "system" | "user" | "assistant"; content: string };
 type LlmConfig = { baseUrl: string; apiKey: string; model: string; timeoutMs: number };
 type MoyattoCandidate = { text: string; reason: string };
 
+type CommandSpec = {
+  cwd?: string;
+  exec: string[];
+  args?: string[];
+  allowArgs?: boolean;
+  env?: Record<string, string>;
+};
+
+type CommandRegistry = {
+  commands: Record<string, CommandSpec>;
+  sources: string[];
+};
+
+type ResolvedCommand =
+  | { kind: "shell"; command: string }
+  | { kind: "exec"; exec: string[]; cwd?: string; env?: Record<string, string> };
+
 export interface RunnerConfig {
   apiBaseUrl: string;
   token: string;
@@ -30,6 +47,8 @@ export interface RunnerConfig {
   filterTenantId?: string;
   filterKinds?: string;
   filterPhases?: string;
+  commandsRegistry?: CommandRegistry;
+  commandsStrict?: boolean;
 }
 
 const nowIso = () => new Date().toISOString();
@@ -61,6 +80,288 @@ const getNumber = (value: unknown): number | undefined => {
   if (!trimmed) return undefined;
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const getStringArray = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const out = value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+  return out.length > 0 ? out : undefined;
+};
+
+const coerceStringArgs = (value: unknown): string[] | undefined => {
+  const list = getStringArray(value);
+  if (list) return list;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : undefined;
+  }
+  return undefined;
+};
+
+const expandHome = (value: string): string => {
+  const home = os.homedir();
+  if (!home) return value;
+  if (value === "~") return home;
+  if (value.startsWith("~/")) return path.join(home, value.slice(2));
+  return value.replaceAll("${HOME}", home).replaceAll("$HOME", home);
+};
+
+const resolvePathFrom = (baseDir: string, value: string): string => {
+  const expanded = expandHome(value);
+  if (path.isAbsolute(expanded)) return expanded;
+  return path.resolve(baseDir, expanded);
+};
+
+const stripInlineComment = (line: string): string => {
+  let out = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (ch === `"` && !inSingle) {
+      inDouble = !inDouble;
+    } else if (ch === "#" && !inSingle && !inDouble) {
+      break;
+    }
+    out += ch;
+  }
+  return out;
+};
+
+const splitFlowItems = (raw: string): string[] => {
+  const items: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    if (ch === `"` && !inSingle) inDouble = !inDouble;
+    if (ch === "," && !inSingle && !inDouble) {
+      items.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) items.push(current.trim());
+  return items;
+};
+
+const parseScalar = (raw: string): unknown => {
+  if (!raw) return "";
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  if (raw === "null" || raw === "~") return null;
+  if (/^-?\d+(\.\d+)?$/.test(raw)) return Number(raw);
+  if ((raw.startsWith(`"`) && raw.endsWith(`"`)) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    const body = raw.slice(1, -1);
+    if (raw.startsWith(`"`)) {
+      try {
+        return JSON.parse(`"${body.replace(/"/g, '\\"')}"`);
+      } catch {
+        return body;
+      }
+    }
+    return body.replace(/''/g, "'");
+  }
+  return raw;
+};
+
+const parseValue = (raw: string): unknown => {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    const inner = trimmed.slice(1, -1).trim();
+    if (!inner) return [];
+    return splitFlowItems(inner).map((entry) => parseScalar(entry));
+  }
+  return parseScalar(trimmed);
+};
+
+const parseSimpleYaml = (raw: string): unknown => {
+  type Ctx = { indent: number; value: unknown; pending?: boolean; parent?: Record<string, unknown>; key?: string };
+  const root: Record<string, unknown> = {};
+  const stack: Ctx[] = [{ indent: -1, value: root }];
+  const lines = raw.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = stripInlineComment(lines[index]);
+    if (!rawLine.trim()) continue;
+    const indent = rawLine.match(/^ */)?.[0].length ?? 0;
+    const text = rawLine.slice(indent).trimEnd();
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) {
+      stack.pop();
+    }
+    const ctx = stack[stack.length - 1];
+    if (ctx.pending) {
+      if (text.startsWith("- ")) {
+        const list: unknown[] = [];
+        if (ctx.parent && ctx.key) ctx.parent[ctx.key] = list;
+        ctx.value = list;
+      }
+      ctx.pending = false;
+    }
+    if (text.startsWith("- ")) {
+      if (!Array.isArray(ctx.value)) {
+        throw new Error(`Invalid YAML: list item without list at line ${index + 1}`);
+      }
+      const itemText = text.slice(2).trim();
+      ctx.value.push(parseValue(itemText));
+      continue;
+    }
+    const idx = text.indexOf(":");
+    if (idx === -1) {
+      throw new Error(`Invalid YAML: missing ':' at line ${index + 1}`);
+    }
+    const key = text.slice(0, idx).trim();
+    const valueText = text.slice(idx + 1).trim();
+    if (!key) {
+      throw new Error(`Invalid YAML: empty key at line ${index + 1}`);
+    }
+    if (valueText.length === 0) {
+      const obj: Record<string, unknown> = {};
+      if (!asRecord(ctx.value)) {
+        throw new Error(`Invalid YAML: cannot assign key at line ${index + 1}`);
+      }
+      (ctx.value as Record<string, unknown>)[key] = obj;
+      stack.push({ indent, value: obj, pending: true, parent: ctx.value as Record<string, unknown>, key });
+      continue;
+    }
+    const value = parseValue(valueText);
+    if (!asRecord(ctx.value)) {
+      throw new Error(`Invalid YAML: cannot assign key at line ${index + 1}`);
+    }
+    (ctx.value as Record<string, unknown>)[key] = value;
+    if (asRecord(value) || Array.isArray(value)) {
+      stack.push({ indent, value });
+    }
+  }
+  return root;
+};
+
+const coerceStringArray = (value: unknown): string[] | undefined => {
+  const list = getStringArray(value);
+  if (list) return list;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : undefined;
+  }
+  return undefined;
+};
+
+const coerceEnvMap = (value: unknown): Record<string, string> | undefined => {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const entries = Object.entries(record)
+    .map(([key, entry]) => {
+      if (!key.trim()) return null;
+      if (typeof entry === "string") return [key, entry];
+      if (typeof entry === "number" || typeof entry === "boolean") return [key, String(entry)];
+      return null;
+    })
+    .filter(Boolean) as [string, string][];
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+};
+
+const loadCommandsFile = async (filePath: string): Promise<CommandRegistry> => {
+  const raw = await fs.readFile(filePath, "utf8");
+  const parsed = filePath.endsWith(".json") ? JSON.parse(raw) : parseSimpleYaml(raw);
+  const record = asRecord(parsed);
+  if (!record) {
+    throw new Error(`Invalid commands file (root must be a mapping): ${filePath}`);
+  }
+  const commandsRecord = asRecord(record.commands);
+  if (!commandsRecord) {
+    throw new Error(`Invalid commands file (missing commands): ${filePath}`);
+  }
+  const baseDir = path.dirname(filePath);
+  const commands: Record<string, CommandSpec> = {};
+  for (const [id, entry] of Object.entries(commandsRecord)) {
+    const spec = asRecord(entry);
+    if (!spec) {
+      throw new Error(`Invalid command spec for "${id}" in ${filePath}`);
+    }
+    const exec = coerceStringArray(spec.exec);
+    if (!exec || exec.length === 0) {
+      throw new Error(`Command "${id}" missing exec in ${filePath}`);
+    }
+    const cwdRaw = getString(spec.cwd);
+    const cwd = cwdRaw ? resolvePathFrom(baseDir, cwdRaw) : undefined;
+    const args = coerceStringArray(spec.args);
+    const env = coerceEnvMap(spec.env);
+    const allowArgs = Boolean(spec.allowArgs);
+    commands[id] = {
+      cwd,
+      exec,
+      args,
+      allowArgs,
+      env,
+    };
+  }
+  return { commands, sources: [filePath] };
+};
+
+const fileExists = async (filePath: string): Promise<boolean> => {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error ? (error as { code?: string }).code : "";
+    if (code === "ENOENT") return false;
+    throw error;
+  }
+};
+
+const findFirstExisting = async (paths: string[]): Promise<string | undefined> => {
+  for (const candidate of paths) {
+    const resolved = resolvePathFrom(process.cwd(), candidate);
+    if (await fileExists(resolved)) return resolved;
+  }
+  return undefined;
+};
+
+const resolveCommandsRegistry = async (): Promise<CommandRegistry | undefined> => {
+  const baseEnv = resolveEnv("VIBE_BRIDGE_COMMANDS_FILE");
+  const localEnv = resolveEnv("VIBE_BRIDGE_COMMANDS_LOCAL_FILE");
+  const candidates = [
+    path.join(process.cwd(), "config", "commands.yml"),
+    path.join(process.cwd(), "commands.yml"),
+    path.join(os.homedir(), ".config", "vibe-bridge", "commands.yml"),
+  ].filter(Boolean) as string[];
+  const localCandidates = [
+    path.join(os.homedir(), ".config", "vibe-bridge", "commands.local.yml"),
+  ].filter(Boolean) as string[];
+
+  const resolvedBase = baseEnv ? resolvePathFrom(process.cwd(), baseEnv) : await findFirstExisting(candidates);
+  const resolvedLocal = localEnv
+    ? resolvePathFrom(process.cwd(), localEnv)
+    : await findFirstExisting(localCandidates);
+
+  if (baseEnv && resolvedBase && !(await fileExists(resolvedBase))) {
+    throw new Error(`Commands file not found: ${resolvedBase}`);
+  }
+  if (localEnv && resolvedLocal && !(await fileExists(resolvedLocal))) {
+    throw new Error(`Commands local file not found: ${resolvedLocal}`);
+  }
+
+  const registries: CommandRegistry[] = [];
+  if (resolvedBase && (await fileExists(resolvedBase))) {
+    registries.push(await loadCommandsFile(resolvedBase));
+  }
+  if (resolvedLocal && (await fileExists(resolvedLocal))) {
+    registries.push(await loadCommandsFile(resolvedLocal));
+  }
+  if (registries.length === 0) return undefined;
+  const merged: CommandRegistry = { commands: {}, sources: [] };
+  for (const registry of registries) {
+    merged.sources.push(...registry.sources);
+    Object.assign(merged.commands, registry.commands);
+  }
+  return merged;
 };
 
 const postJson = async (baseUrl: string, token: string, pathName: string, payload: unknown) => {
@@ -551,6 +852,31 @@ const runShell = async (
   });
 };
 
+const runExec = async (
+  exec: string[],
+  cwd: string,
+  extraEnv?: Record<string, string>,
+  onChunk?: (chunk: string) => Promise<void>,
+) => {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+    const [cmd, ...args] = exec;
+    const child = spawn(cmd, args, {
+      cwd,
+      env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    const pushChunk = (data: Buffer, append: (text: string) => void) => {
+      const text = data.toString();
+      append(text);
+      if (onChunk) void onChunk(text).catch(() => {});
+    };
+    child.stdout.on("data", (data) => pushChunk(data, (text) => (stdout += text)));
+    child.stderr.on("data", (data) => pushChunk(data, (text) => (stderr += text)));
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+};
+
 const ensureRepo = async (job: JobSpec, workspaceRoot: string) => {
   if (!job.repo?.url) return { repoDir: workspaceRoot, checkoutDir: workspaceRoot };
   const repoDir = resolveRepoDir(workspaceRoot, job.repo.url, job.tenantId, job.projectId);
@@ -669,14 +995,60 @@ const completeJob = async (config: RunnerConfig, job: JobSpec, result: JobResult
   await maybeNotifyJobCallback(config, job, result).catch(() => null);
 };
 
-const resolveCommand = (job: JobSpec, phase: "plan" | "execute", config: RunnerConfig) => {
+const resolveAllowlistedCommand = (
+  job: JobSpec,
+  phase: "plan" | "execute",
+  config: RunnerConfig,
+): ResolvedCommand | null => {
+  const params = job.params || {};
+  const commandId =
+    getString(params[`${phase}CommandId`]) ||
+    getString(params.commandId) ||
+    getString(params[`${phase}CommandID`]) ||
+    getString(params.commandID);
+  if (!commandId) return null;
+  const registry = config.commandsRegistry;
+  if (!registry) {
+    throw new Error(`commandId "${commandId}" provided but no commands registry is configured`);
+  }
+  const spec = registry.commands[commandId];
+  if (!spec) {
+    throw new Error(`Unknown commandId "${commandId}" (sources: ${registry.sources.join(", ")})`);
+  }
+  const phaseArgs =
+    coerceStringArgs(params[`${phase}CommandArgs`]) ||
+    coerceStringArgs(params.commandArgs) ||
+    coerceStringArgs(params[`${phase}CommandARGS`]) ||
+    coerceStringArgs(params.commandARGS);
+  if (phaseArgs && phaseArgs.length > 0 && !spec.allowArgs) {
+    throw new Error(`commandId "${commandId}" does not allow args`);
+  }
+  const args = spec.args ? [...spec.args] : [];
+  if (phaseArgs && phaseArgs.length > 0) {
+    args.push(...phaseArgs);
+  }
+  return {
+    kind: "exec",
+    exec: [...spec.exec, ...args],
+    cwd: spec.cwd,
+    env: spec.env,
+  };
+};
+
+const resolveCommand = (job: JobSpec, phase: "plan" | "execute", config: RunnerConfig): ResolvedCommand | null => {
+  const allowlisted = resolveAllowlistedCommand(job, phase, config);
+  if (allowlisted) return allowlisted;
+  if (config.commandsStrict) {
+    throw new Error(`commandId is required (phase=${phase})`);
+  }
   const params = job.params || {};
   const paramCommand =
     typeof params[`${phase}Command`] === "string" ? String(params[`${phase}Command`]) : undefined;
-  if (phase === "plan") {
-    return job.commands?.plan || paramCommand || config.defaultPlanCommand;
-  }
-  return job.commands?.execute || paramCommand || config.defaultExecuteCommand;
+  const command = phase === "plan"
+    ? job.commands?.plan || paramCommand || config.defaultPlanCommand
+    : job.commands?.execute || paramCommand || config.defaultExecuteCommand;
+  if (!command) return null;
+  return { kind: "shell", command };
 };
 
 export const executeJob = async (job: JobSpec, config: RunnerConfig): Promise<JobResult> => {
@@ -686,8 +1058,21 @@ export const executeJob = async (job: JobSpec, config: RunnerConfig): Promise<Jo
   }
 
   const phase = job.phase || "execute";
-  const command = resolveCommand(job, phase, config);
-  if (!command) {
+  let resolved: ResolvedCommand | null = null;
+  try {
+    resolved = resolveCommand(job, phase, config);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const result: JobResult = {
+      jobId: job.id,
+      status: "failed",
+      finishedAt: nowIso(),
+      errorMessage: message,
+    };
+    await completeJob(config, job, result);
+    return result;
+  }
+  if (!resolved) {
     const result: JobResult = {
       jobId: job.id,
       status: "failed",
@@ -706,7 +1091,11 @@ export const executeJob = async (job: JobSpec, config: RunnerConfig): Promise<Jo
     outputChunks.push(chunk);
     await sendEvent(config, job, "log", chunk);
   };
-  const { code, stdout, stderr } = await runShell(command, checkoutDir, onChunk);
+  const commandCwd = resolved.kind === "exec" && resolved.cwd ? resolved.cwd : checkoutDir;
+  const { code, stdout, stderr } =
+    resolved.kind === "exec"
+      ? await runExec(resolved.exec, commandCwd, resolved.env, onChunk)
+      : await runShell(resolved.command, commandCwd, onChunk);
 
   let planText = "";
   if (phase === "plan") {
@@ -1006,13 +1395,14 @@ export const runLoop = async (config: RunnerConfig) => {
   }
 };
 
-const loadEnvConfig = (): RunnerConfig => {
+const loadEnvConfig = async (): Promise<RunnerConfig> => {
   const apiBaseUrl = (process.env.VIBE_BRIDGE_API_BASE || "").trim();
   const token = (process.env.VIBE_BRIDGE_API_TOKEN || "").trim();
   const workspaceRoot = (process.env.VIBE_BRIDGE_WORKSPACE_ROOT || "").trim();
   if (!apiBaseUrl || !token || !workspaceRoot) {
     throw new Error("Missing VIBE_BRIDGE_API_BASE / VIBE_BRIDGE_API_TOKEN / VIBE_BRIDGE_WORKSPACE_ROOT");
   }
+  const commandsRegistry = await resolveCommandsRegistry();
   return {
     apiBaseUrl,
     token,
@@ -1029,11 +1419,13 @@ const loadEnvConfig = (): RunnerConfig => {
     filterTenantId: process.env.VIBE_BRIDGE_RUNNER_TENANT_ID || undefined,
     filterKinds: process.env.VIBE_BRIDGE_RUNNER_KINDS || undefined,
     filterPhases: process.env.VIBE_BRIDGE_RUNNER_PHASES || undefined,
+    commandsRegistry,
+    commandsStrict: process.env.VIBE_BRIDGE_COMMANDS_STRICT === "1",
   };
 };
 
 const main = async () => {
-  const config = loadEnvConfig();
+  const config = await loadEnvConfig();
   await runLoop(config);
 };
 
