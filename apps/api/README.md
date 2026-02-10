@@ -13,9 +13,12 @@ Environment:
 - `PLAN_INLINE_MAX_CHARS` (optional, max chars to keep inline; `0` disables)
 - `PLAN_TABLE` (optional, default `vibe_bridge_plans`)
 - `DATABASE_URL` (required when `PLAN_STORAGE_BACKEND=postgres`)
+- `JOB_STORAGE_BACKEND` (optional, `memory` or `postgres`)
+- `DATABASE_URL` (required when `JOB_STORAGE_BACKEND=postgres`)
 
 Notes:
 - When `PLAN_STORAGE_BACKEND=postgres`, the plan table must already exist. Create it via your normal human-run DB migration workflow (this repo avoids runtime DDL).
+- The `PLAN_TABLE` override is only supported for the default `vibe_bridge_plans` schema.
 
 Endpoints:
 - `GET /ui` (minimal Dev UI for local testing)

@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@vibe-bridge/shared": "workspace:*",
+    "drizzle-orm": "^0.33.0",
     "pg": "^8.13.1"
   }
 }

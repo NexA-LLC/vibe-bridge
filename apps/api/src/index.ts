@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
+import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 
 import type {
   JobEvent,
@@ -10,6 +12,7 @@ import type {
   JobSpec,
   JobState,
 } from "@vibe-bridge/shared";
+import { jobEvents, jobs as jobsTable, vibeBridgePlans } from "./db/schema.js";
 
 type PlanStatus = "pending" | "approved" | "rejected";
 
@@ -38,12 +41,22 @@ const PLAN_WEBHOOK_TOKEN = (process.env.PLAN_WEBHOOK_TOKEN || "").trim();
 const PLAN_STORAGE_BACKEND = (process.env.PLAN_STORAGE_BACKEND || "memory").trim().toLowerCase();
 const PLAN_TABLE = (process.env.PLAN_TABLE || "vibe_bridge_plans").trim();
 const PLAN_INLINE_MAX_CHARS = Number(process.env.PLAN_INLINE_MAX_CHARS || "0");
+const JOB_STORAGE_BACKEND = (process.env.JOB_STORAGE_BACKEND || "memory").trim().toLowerCase();
 const DATABASE_URL = (process.env.DATABASE_URL || "").trim();
 
 const jobs = new Map<string, JobRecord>();
 const eventIndex = new Set<string>();
-let planPool: pg.Pool | null = null;
-let planInitPromise: Promise<void> | null = null;
+let dbPool: pg.Pool | null = null;
+let dbInitPromise: Promise<void> | null = null;
+let dbClient: ReturnType<typeof drizzle> | null = null;
+
+if (PLAN_STORAGE_BACKEND === "postgres" && PLAN_TABLE !== "vibe_bridge_plans") {
+  throw new Error("PLAN_TABLE must be vibe_bridge_plans when PLAN_STORAGE_BACKEND=postgres");
+}
+
+if (JOB_STORAGE_BACKEND !== "memory" && JOB_STORAGE_BACKEND !== "postgres") {
+  throw new Error("JOB_STORAGE_BACKEND must be memory or postgres");
+}
 
 const json = (res: ServerResponse, status: number, payload: unknown) => {
   const body = JSON.stringify(payload);
@@ -73,21 +86,22 @@ const noContent = (res: ServerResponse) => {
 
 const nowIso = () => new Date().toISOString();
 
-const ensurePlanPool = async () => {
-  if (PLAN_STORAGE_BACKEND !== "postgres") return null;
+const useDb = JOB_STORAGE_BACKEND === "postgres";
+const needsDb = useDb || PLAN_STORAGE_BACKEND === "postgres";
+
+const ensureDb = async () => {
+  if (!needsDb) return null;
   if (!DATABASE_URL) {
-    throw new Error("DATABASE_URL is required when PLAN_STORAGE_BACKEND=postgres");
+    throw new Error("DATABASE_URL is required when JOB_STORAGE_BACKEND or PLAN_STORAGE_BACKEND is postgres");
   }
-  if (!/^[a-zA-Z0-9_]+$/.test(PLAN_TABLE)) {
-    throw new Error("PLAN_TABLE must be an identifier with letters/numbers/underscore only");
-  }
-  if (!planInitPromise) {
-    planInitPromise = (async () => {
-      planPool = new Pool({ connectionString: DATABASE_URL });
+  if (!dbInitPromise) {
+    dbInitPromise = (async () => {
+      dbPool = new Pool({ connectionString: DATABASE_URL });
+      dbClient = drizzle(dbPool);
     })();
   }
-  await planInitPromise;
-  return planPool;
+  await dbInitPromise;
+  return dbClient;
 };
 
 const requireAuth = (req: IncomingMessage, res: ServerResponse): boolean => {
@@ -131,7 +145,61 @@ const normalizeSpec = (spec: Partial<JobSpec>): JobSpec => {
   };
 };
 
-const createJob = (spec: Partial<JobSpec>): JobRecord => {
+type JobRow = typeof jobsTable.$inferSelect;
+type JobEventRow = typeof jobEvents.$inferSelect;
+
+const toDate = (value: string | Date): Date => (value instanceof Date ? value : new Date(value));
+
+const toIso = (value: Date | string | null | undefined): string | undefined => {
+  if (!value) return undefined;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+};
+
+const mapEventRow = (row: JobEventRow): JobEvent => ({
+  id: row.id,
+  jobId: row.jobId,
+  kind: row.kind as JobEvent["kind"],
+  message: row.message,
+  createdAt: toIso(row.createdAt) || nowIso(),
+  sequence: row.sequence ?? undefined,
+  data: (row.data as Record<string, unknown> | null) ?? undefined,
+});
+
+const mapJobRow = (row: JobRow, events: JobEvent[]): JobRecord => {
+  const leaseUntil = toIso(row.leaseUntil);
+  return {
+    id: row.id,
+    tenantId: row.tenantId,
+    kind: row.kind as JobSpec["kind"],
+    phase: (row.phase as JobSpec["phase"]) || undefined,
+    projectId: row.projectId || undefined,
+    repo: (row.repo as JobSpec["repo"]) || undefined,
+    commands: (row.commands as JobSpec["commands"]) || undefined,
+    planOutputPath: row.planOutputPath || undefined,
+    context: row.context || undefined,
+    params: (row.params as Record<string, unknown>) || {},
+    idempotencyKey: row.idempotencyKey || undefined,
+    timeoutSec: row.timeoutSec ?? undefined,
+    requestedAt: toIso(row.requestedAt) || nowIso(),
+    state: row.state as JobState,
+    createdAt: toIso(row.createdAt) || nowIso(),
+    updatedAt: toIso(row.updatedAt) || nowIso(),
+    lease: leaseUntil
+      ? {
+          jobId: row.id,
+          leaseUntil,
+          attempt: row.leaseAttempt ?? 1,
+        }
+      : undefined,
+    result: (row.result as JobResult) || undefined,
+    events,
+    planStatus: (row.planStatus as PlanStatus) || undefined,
+    planText: row.planText || undefined,
+    planTruncated: row.planTruncated ?? undefined,
+  };
+};
+
+const createJob = async (spec: Partial<JobSpec>): Promise<JobRecord> => {
   const normalized = normalizeSpec(spec);
   const timestamp = nowIso();
   const record: JobRecord = {
@@ -141,7 +209,37 @@ const createJob = (spec: Partial<JobSpec>): JobRecord => {
     updatedAt: timestamp,
     events: [],
   };
-  jobs.set(record.id, record);
+  if (!useDb) {
+    jobs.set(record.id, record);
+    return record;
+  }
+  const db = await ensureDb();
+  if (!db) return record;
+  await db.insert(jobsTable).values({
+    id: record.id,
+    tenantId: record.tenantId,
+    kind: record.kind,
+    phase: record.phase ?? null,
+    projectId: record.projectId ?? null,
+    repo: record.repo ?? null,
+    commands: record.commands ?? null,
+    planOutputPath: record.planOutputPath ?? null,
+    context: record.context ?? null,
+    params: record.params ?? {},
+    idempotencyKey: record.idempotencyKey ?? null,
+    timeoutSec: record.timeoutSec ?? null,
+    requestedAt: toDate(record.requestedAt),
+    createdAt: toDate(record.createdAt),
+    updatedAt: toDate(record.updatedAt),
+    state: record.state,
+    leaseUntil: null,
+    leaseAttempt: null,
+    result: null,
+    resultStatus: null,
+    planStatus: null,
+    planText: null,
+    planTruncated: null,
+  });
   return record;
 };
 
@@ -171,14 +269,33 @@ const leaseJob = (job: JobRecord, ttlSec: number): JobLease => {
   return lease;
 };
 
-const appendEvents = (job: JobRecord, events: JobEvent[]) => {
-  for (const event of events) {
-    const key = `${job.id}:${event.id}`;
-    if (eventIndex.has(key)) continue;
-    eventIndex.add(key);
-    job.events.push(event);
+const appendEvents = async (job: JobRecord, events: JobEvent[]) => {
+  if (!useDb) {
+    for (const event of events) {
+      const key = `${job.id}:${event.id}`;
+      if (eventIndex.has(key)) continue;
+      eventIndex.add(key);
+      job.events.push(event);
+    }
+    job.updatedAt = nowIso();
+    return;
   }
-  job.updatedAt = nowIso();
+  const db = await ensureDb();
+  if (!db) return;
+  const payload = events.map((event) => ({
+    id: event.id,
+    jobId: job.id,
+    kind: event.kind,
+    message: event.message,
+    createdAt: toDate(event.createdAt),
+    sequence: event.sequence ?? null,
+    data: event.data ?? null,
+  }));
+  if (payload.length > 0) {
+    await db.insert(jobEvents).values(payload).onConflictDoNothing();
+    const now = new Date();
+    await db.update(jobsTable).set({ updatedAt: now }).where(eq(jobsTable.id, job.id));
+  }
 };
 
 const findPlanText = (result: JobResult | undefined): string | undefined => {
@@ -191,28 +308,213 @@ const findPlanText = (result: JobResult | undefined): string | undefined => {
 const applyPlanText = async (job: JobRecord, planText?: string) => {
   if (!planText) return;
   const maxChars = Number.isFinite(PLAN_INLINE_MAX_CHARS) ? PLAN_INLINE_MAX_CHARS : 0;
+  let inlineText = planText;
+  let truncated = false;
   if (maxChars > 0 && planText.length > maxChars) {
-    job.planText = planText.slice(0, maxChars);
-    job.planTruncated = true;
-  } else {
-    job.planText = planText;
+    inlineText = planText.slice(0, maxChars);
+    truncated = true;
+  }
+  job.planText = inlineText;
+  job.planTruncated = truncated;
+  if (useDb) {
+    const db = await ensureDb();
+    if (db) {
+      await db
+        .update(jobsTable)
+        .set({ planText: inlineText, planTruncated: truncated })
+        .where(eq(jobsTable.id, job.id));
+    }
   }
   if (PLAN_STORAGE_BACKEND === "postgres") {
     try {
-      const pool = await ensurePlanPool();
-      if (!pool) return;
-      const timestamp = nowIso();
-      await pool.query(
-        `INSERT INTO ${PLAN_TABLE} (job_id, tenant_id, project_id, plan_text, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $5)
-         ON CONFLICT (job_id)
-         DO UPDATE SET plan_text = EXCLUDED.plan_text, updated_at = EXCLUDED.updated_at`,
-        [job.id, job.tenantId, job.projectId ?? null, planText, timestamp],
-      );
+      const db = await ensureDb();
+      if (!db) return;
+      const timestamp = new Date();
+      await db
+        .insert(vibeBridgePlans)
+        .values({
+          jobId: job.id,
+          tenantId: job.tenantId,
+          projectId: job.projectId ?? null,
+          planText,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .onConflictDoUpdate({
+          target: vibeBridgePlans.jobId,
+          set: {
+            planText,
+            updatedAt: timestamp,
+          },
+        });
     } catch (err) {
       console.error("[vibe-bridge] plan store failed", err);
     }
   }
+};
+
+const fetchJobRecord = async (jobId: string): Promise<JobRecord | null> => {
+  if (!useDb) {
+    return jobs.get(jobId) || null;
+  }
+  const db = await ensureDb();
+  if (!db) return null;
+  const rows = await db.select().from(jobsTable).where(eq(jobsTable.id, jobId)).limit(1);
+  if (rows.length === 0) return null;
+  const eventRows = await db
+    .select()
+    .from(jobEvents)
+    .where(eq(jobEvents.jobId, jobId))
+    .orderBy(asc(jobEvents.createdAt));
+  const events = eventRows.map(mapEventRow);
+  return mapJobRow(rows[0], events);
+};
+
+const listJobsSummary = async (filters: {
+  tenantId?: string;
+  kinds?: Set<string>;
+  phases?: Set<string>;
+  states?: Set<string>;
+  limit: number;
+}) => {
+  if (!useDb) {
+    return Array.from(jobs.values())
+      .filter((job) => {
+        if (filters.tenantId && job.tenantId !== filters.tenantId) return false;
+        if (filters.kinds && filters.kinds.size > 0 && !filters.kinds.has(job.kind)) return false;
+        if (filters.phases && filters.phases.size > 0 && !filters.phases.has(job.phase || "")) return false;
+        if (filters.states && filters.states.size > 0 && !filters.states.has(job.state)) return false;
+        return true;
+      })
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, filters.limit)
+      .map((job) => ({
+        id: job.id,
+        tenantId: job.tenantId,
+        kind: job.kind,
+        phase: job.phase || null,
+        projectId: job.projectId || null,
+        state: job.state,
+        requestedAt: job.requestedAt,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+        planStatus: job.planStatus || null,
+        resultStatus: job.result?.status || null,
+        eventsCount: job.events.length,
+      }));
+  }
+
+  const db = await ensureDb();
+  if (!db) return [];
+  const conditions = [];
+  if (filters.tenantId) conditions.push(eq(jobsTable.tenantId, filters.tenantId));
+  if (filters.kinds && filters.kinds.size > 0) conditions.push(inArray(jobsTable.kind, [...filters.kinds]));
+  if (filters.phases && filters.phases.size > 0) conditions.push(inArray(jobsTable.phase, [...filters.phases]));
+  if (filters.states && filters.states.size > 0) conditions.push(inArray(jobsTable.state, [...filters.states]));
+
+  let query = db
+    .select()
+    .from(jobsTable)
+    .orderBy(desc(jobsTable.updatedAt))
+    .limit(filters.limit)
+    .$dynamic();
+  if (conditions.length > 0) {
+    query = query.where(and(...conditions));
+  }
+  const rows = await query;
+  if (rows.length === 0) return [];
+  const ids = rows.map((row) => row.id);
+  const counts = await db
+    .select({ jobId: jobEvents.jobId, count: count() })
+    .from(jobEvents)
+    .where(inArray(jobEvents.jobId, ids))
+    .groupBy(jobEvents.jobId);
+  const countMap = new Map<string, number>();
+  for (const entry of counts) {
+    countMap.set(entry.jobId, Number(entry.count));
+  }
+  return rows.map((row) => ({
+    id: row.id,
+    tenantId: row.tenantId,
+    kind: row.kind,
+    phase: row.phase || null,
+    projectId: row.projectId || null,
+    state: row.state as JobState,
+    requestedAt: toIso(row.requestedAt) || nowIso(),
+    createdAt: toIso(row.createdAt) || nowIso(),
+    updatedAt: toIso(row.updatedAt) || nowIso(),
+    planStatus: row.planStatus || null,
+    resultStatus: row.resultStatus || null,
+    eventsCount: countMap.get(row.id) || 0,
+  }));
+};
+
+const leaseNextJob = async (filters: {
+  tenantId?: string;
+  kinds?: Set<string>;
+  phases?: Set<string>;
+}, ttlSec: number): Promise<{ job: JobRecord; lease: JobLease } | null> => {
+  if (!useDb) {
+    const queued = listQueuedJobs(filters);
+    if (queued.length === 0) return null;
+    queued.sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+    const job = queued[0];
+    const lease = leaseJob(job, ttlSec);
+    return { job, lease };
+  }
+
+  const db = await ensureDb();
+  if (!db) return null;
+  const conditions = [eq(jobsTable.state, "queued")];
+  if (filters.tenantId) conditions.push(eq(jobsTable.tenantId, filters.tenantId));
+  if (filters.kinds && filters.kinds.size > 0) conditions.push(inArray(jobsTable.kind, [...filters.kinds]));
+  if (filters.phases && filters.phases.size > 0) conditions.push(inArray(jobsTable.phase, [...filters.phases]));
+  const rows = await db
+    .select()
+    .from(jobsTable)
+    .where(and(...conditions))
+    .orderBy(asc(jobsTable.requestedAt))
+    .limit(1);
+  if (rows.length === 0) return null;
+  const row = rows[0];
+  const leaseUntil = new Date(Date.now() + ttlSec * 1000);
+  const attempt = (row.leaseAttempt ?? 0) + 1;
+  const updated = await db
+    .update(jobsTable)
+    .set({
+      state: "leased",
+      leaseUntil,
+      leaseAttempt: attempt,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(jobsTable.id, row.id), eq(jobsTable.state, "queued")))
+    .returning();
+  if (updated.length === 0) return null;
+  const job = mapJobRow(updated[0], []);
+  const lease: JobLease = { jobId: job.id, leaseUntil: leaseUntil.toISOString(), attempt };
+  return { job, lease };
+};
+
+const refreshLease = async (job: JobRecord, ttlSec: number): Promise<JobLease> => {
+  if (!useDb) return leaseJob(job, ttlSec);
+  const db = await ensureDb();
+  if (!db) return leaseJob(job, ttlSec);
+  const leaseUntil = new Date(Date.now() + ttlSec * 1000);
+  const attempt = (job.lease?.attempt || 0) + 1;
+  await db
+    .update(jobsTable)
+    .set({
+      state: "leased",
+      leaseUntil,
+      leaseAttempt: attempt,
+      updatedAt: new Date(),
+    })
+    .where(eq(jobsTable.id, job.id));
+  const lease = { jobId: job.id, leaseUntil: leaseUntil.toISOString(), attempt };
+  job.lease = lease;
+  job.state = "leased";
+  job.updatedAt = nowIso();
+  return lease;
 };
 
 const notifyPlan = async (job: JobRecord) => {
@@ -679,7 +981,7 @@ const server = http.createServer(async (req, res) => {
       error(res, 400, "Invalid job payload");
       return;
     }
-    const record = createJob(body as JobSpec);
+    const record = await createJob(body as JobSpec);
     json(res, 201, record);
     return;
   }
@@ -692,28 +994,7 @@ const server = http.createServer(async (req, res) => {
       states: parseList(url.searchParams.get("states")),
     };
     const limit = Math.min(toNumber(url.searchParams.get("limit"), 200), 500);
-    const records = Array.from(jobs.values()).filter((job) => {
-      if (filters.tenantId && job.tenantId !== filters.tenantId) return false;
-      if (filters.kinds && filters.kinds.size > 0 && !filters.kinds.has(job.kind)) return false;
-      if (filters.phases && filters.phases.size > 0 && !filters.phases.has(job.phase || "")) return false;
-      if (filters.states && filters.states.size > 0 && !filters.states.has(job.state)) return false;
-      return true;
-    });
-    records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    const payload = records.slice(0, limit).map((job) => ({
-      id: job.id,
-      tenantId: job.tenantId,
-      kind: job.kind,
-      phase: job.phase || null,
-      projectId: job.projectId || null,
-      state: job.state,
-      requestedAt: job.requestedAt,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-      planStatus: job.planStatus || null,
-      resultStatus: job.result?.status || null,
-      eventsCount: job.events.length,
-    }));
+    const payload = await listJobsSummary({ ...filters, limit });
     json(res, 200, { jobs: payload });
     return;
   }
@@ -728,12 +1009,9 @@ const server = http.createServer(async (req, res) => {
     };
     const deadline = Date.now() + waitSec * 1000;
     while (true) {
-      const queued = listQueuedJobs(filters);
-      if (queued.length > 0) {
-        queued.sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
-        const job = queued[0];
-        const lease = leaseJob(job, ttlSec);
-        json(res, 200, { job, lease });
+      const leased = await leaseNextJob(filters, ttlSec);
+      if (leased) {
+        json(res, 200, leased);
         return;
       }
       if (Date.now() >= deadline) break;
@@ -747,7 +1025,7 @@ const server = http.createServer(async (req, res) => {
   if (jobMatch) {
     const jobId = jobMatch[1];
     const action = jobMatch[2];
-    const job = jobs.get(jobId);
+    const job = await fetchJobRecord(jobId);
     if (!job) {
       error(res, 404, "Job not found");
       return;
@@ -760,7 +1038,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && action === "heartbeat") {
       const ttlSec = toNumber(url.searchParams.get("leaseTtlSec"), DEFAULT_LEASE_TTL_SEC);
-      const lease = leaseJob(job, ttlSec);
+      const lease = await refreshLease(job, ttlSec);
       json(res, 200, { lease });
       return;
     }
@@ -779,7 +1057,7 @@ const server = http.createServer(async (req, res) => {
         jobId: job.id,
         createdAt: evt.createdAt || nowIso(),
       }));
-      appendEvents(job, prepared);
+      await appendEvents(job, prepared);
       json(res, 200, { added: prepared.length });
       return;
     }
@@ -796,21 +1074,38 @@ const server = http.createServer(async (req, res) => {
         error(res, 400, "Missing result");
         return;
       }
-      job.result = {
+      const finishedAt = result.finishedAt || nowIso();
+      const normalizedResult: JobResult = {
         ...result,
         jobId: job.id,
-        finishedAt: result.finishedAt || nowIso(),
+        finishedAt,
       };
+      job.result = normalizedResult;
       job.state =
-        result.status === "completed"
+        normalizedResult.status === "completed"
           ? "completed"
-          : result.status === "failed"
+          : normalizedResult.status === "failed"
             ? "failed"
             : "canceled";
       job.updatedAt = nowIso();
+      if (useDb) {
+        const db = await ensureDb();
+        if (db) {
+          const updatePayload: Partial<typeof jobsTable.$inferInsert> = {
+            result: normalizedResult,
+            resultStatus: normalizedResult.status,
+            state: job.state,
+            updatedAt: toDate(job.updatedAt),
+          };
+          if (job.phase === "plan") {
+            updatePayload.planStatus = "pending";
+          }
+          await db.update(jobsTable).set(updatePayload).where(eq(jobsTable.id, job.id));
+        }
+      }
       if (job.phase === "plan") {
         job.planStatus = "pending";
-        const planText = findPlanText(job.result);
+        const planText = findPlanText(normalizedResult);
         await applyPlanText(job, planText);
         await notifyPlan(job);
       }
@@ -858,7 +1153,7 @@ const server = http.createServer(async (req, res) => {
           planJobId: job.id,
         };
         if (job.planText) nextParams["planText"] = job.planText;
-        executeJob = createJob({
+        executeJob = await createJob({
           tenantId: job.tenantId,
           kind: job.kind,
           phase: "execute",
@@ -871,6 +1166,15 @@ const server = http.createServer(async (req, res) => {
       }
       job.planStatus = status;
       job.updatedAt = nowIso();
+      if (useDb) {
+        const db = await ensureDb();
+        if (db) {
+          await db
+            .update(jobsTable)
+            .set({ planStatus: status, updatedAt: toDate(job.updatedAt) })
+            .where(eq(jobsTable.id, job.id));
+        }
+      }
       json(res, 200, { plan: job, executeJob });
       return;
     }
