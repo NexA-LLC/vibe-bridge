@@ -85,3 +85,9 @@
 
 ## コミュニケーション（重要）
 - 誤解させたとか混乱させたとか言い訳しない. 間違ったことを伝えたなら何を間違ったのか,何も理解していないかなど正直に話す
+
+## SOUL.md
+- `SOUL.md` is the project source of truth for identity, principles, constraints, and evolution policy.
+- When local optimizations conflict with long-term direction, follow `SOUL.md`.
+- Any `SOUL.md` change must be human-reviewed before merge.
+
