@@ -1,0 +1,14 @@
+version: 1
+
+checks:
+  review:
+    enabled: true
+
+  dependabot:
+    enabled: true
+    "on":
+      created: true
+      reintroduced: true
+    severity: [critical, high, medium]
+    branch_prefix: nexa-dependabot
+
