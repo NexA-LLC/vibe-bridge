@@ -13,3 +13,6 @@ clean_codex_branches.command
 clean_codex_branches_multi.command
 clean_vk_worktrees.command
 run_codex.command
+
+# NexA tester artifacts
+.nexa/tester/runs/
