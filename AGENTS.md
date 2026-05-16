@@ -65,23 +65,17 @@
 - launchd: `__FLOWLOG_DIR__/logs/stdout.log` / `__FLOWLOG_DIR__/logs/stderr.log`（`scripts/deploy/flowlog.plist.template` を参照）。
 - Nginx: `scripts/deploy/nginx.flowapps.conf` にログ先の指定が無いので、実際の出力先は環境側の `nginx.conf` を確認する。
 
-## Database / Drizzle Migration ポリシー
+## Database / Postgres
 
-原則（重要）
-- DDL（create/alter/drop）は **Drizzle のスキーマ**（`src/db/schema.ts`）で定義し、**Drizzle Kit のマイグレーションで反映**する。
-- `.env` の DSN（`DATABASE_URL` / `DRIZZLE_DATABASE_URL_DEV` 等）を確認してから実行する（dev/prod/scratch の取り違え禁止）。
-
-禁止事項（AI/自動化エージェント）
-- **AIエージェントは DB コマンドを自発的に実行しない**（`pnpm run db:generate:*`, `pnpm run db:gen-verify-commit`, `pnpm run db:migrate:*`, `pnpm run db:studio:*`, `pnpm run db:reset:*` など）。
-- **AIエージェントは手動で SQL を書く/貼る/実行しない**（`ALTER TABLE ...` 等を含む）。DB変更が必要なら根拠と背景をまとめて人間オーナーへエスカレーションする。
-- マイグレーション不変性（immutability）: 既存の `drizzle/*.sql` は **編集・上書き禁止（roll-forward only）**。
-
-運用フロー（人間作業者向け）
-1) `src/db/schema.ts` を更新
-2) 生成: `pnpm run db:gen-verify-commit`（= generate + 検証 + commit まで含む運用フロー）
-   - 新しい `drizzle/00xx_*.sql` が出たら、**同じ作業セッション内で必ずコミット＆push**する（ローカルに置きっぱなし禁止）。
-3) 適用: `pnpm run db:migrate:dev`（本番はローカルからは行わない方針）
-   - `db:generate` → `db:migrate` の順序を崩さない。
+- 現状の `vibe-bridge` は Drizzle schema / Drizzle migration scripts を持たない。`apps/api` は `PLAN_STORAGE_BACKEND=postgres` の場合に `pg` で既存 table を利用するだけで、runtime DDL は行わない。
+- AI エージェントは DB コマンド、手動 SQL / DDL / DML、本番 DB write を実行してはならない。
+- Postgres の schema 変更が必要になった場合は、先に Drizzle schema / migration 設定と scratch/dev scripts を追加し、上位 `AGENTS.md` の DB opt-in ルールに従うこと。
+- 追加すべき scripts の最低ライン:
+  - `pnpm run db:generate:dev`
+  - `pnpm run db:migrate:dev`
+  - `pnpm run db:reset:scratch`
+  - `pnpm run db:migrate:scratch`
+- 上記 scripts が実装され、repo の `AGENTS.md` で明示 opt-in されるまで、AI は migration 生成/適用を行わない。
 
 ## コミュニケーション（重要）
 - 誤解させたとか混乱させたとか言い訳しない. 間違ったことを伝えたなら何を間違ったのか,何も理解していないかなど正直に話す
@@ -90,4 +84,3 @@
 - `SOUL.md` is the project source of truth for identity, principles, constraints, and evolution policy.
 - When local optimizations conflict with long-term direction, follow `SOUL.md`.
 - Any `SOUL.md` change must be human-reviewed before merge.
-
