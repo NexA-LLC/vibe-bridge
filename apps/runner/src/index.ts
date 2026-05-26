@@ -13,6 +13,7 @@ const MAX_EVENT_MESSAGE = 1800;
 type LlmMessage = { role: "system" | "user" | "assistant"; content: string };
 type LlmConfig = { baseUrl: string; apiKey: string; model: string; timeoutMs: number };
 type MoyattoCandidate = { text: string; reason: string };
+type AiBackend = "codex-cli" | "codex-app-server" | "cursor-cli" | "local-llm" | "command";
 
 type CommandSpec = {
   cwd?: string;
@@ -47,6 +48,11 @@ export interface RunnerConfig {
   filterTenantId?: string;
   filterKinds?: string;
   filterPhases?: string;
+  defaultAiBackend?: string;
+  codexBin?: string;
+  codexAppServerRemote?: string;
+  cursorCommand?: string;
+  aiCommand?: string;
   commandsRegistry?: CommandRegistry;
   commandsStrict?: boolean;
 }
@@ -877,6 +883,236 @@ const runExec = async (
   });
 };
 
+const normalizeAiBackend = (value: string | undefined): AiBackend => {
+  const normalized = (value || "codex-cli").trim().toLowerCase().replace(/_/g, "-");
+  if (
+    normalized === "codex-cli" ||
+    normalized === "codex-app-server" ||
+    normalized === "cursor-cli" ||
+    normalized === "local-llm" ||
+    normalized === "command"
+  ) {
+    return normalized;
+  }
+  throw new Error(`Unknown AI backend: ${value}`);
+};
+
+const resolveAiBackend = (job: JobSpec, config: RunnerConfig): AiBackend => {
+  const params = asRecord(job.params) ?? {};
+  return normalizeAiBackend(
+    getString(params.aiBackend) ||
+      getString(params.backend) ||
+      getString(params.executor) ||
+      config.defaultAiBackend,
+  );
+};
+
+const buildAiPrompt = (job: JobSpec, phase: "plan" | "execute"): string => {
+  const params = asRecord(job.params) ?? {};
+  const prompt =
+    getString(params.prompt) ||
+    getString(params.input) ||
+    getString(params.task) ||
+    getString(params.request) ||
+    job.context;
+  if (!prompt) {
+    throw new Error("Missing AI prompt (use job.context or params.prompt)");
+  }
+  const source = [
+    `Vibe Bridge job: ${job.id}`,
+    `Tenant: ${job.tenantId}`,
+    job.projectId ? `Project: ${job.projectId}` : null,
+    `Phase: ${phase}`,
+    "",
+    prompt,
+  ]
+    .filter((entry) => entry !== null)
+    .join("\n");
+  return source;
+};
+
+const renderCommandTemplate = (
+  template: string,
+  values: { cwd: string; prompt: string; promptFile: string; outputFile: string; phase: string },
+) => {
+  const replacements: Record<string, string> = {
+    "{{cwd}}": values.cwd,
+    "{{prompt}}": values.prompt,
+    "{{promptFile}}": values.promptFile,
+    "{{outputFile}}": values.outputFile,
+    "{{phase}}": values.phase,
+  };
+  let rendered = template;
+  for (const [token, value] of Object.entries(replacements)) {
+    rendered = rendered.split(token).join(value.replace(/'/g, `'\\''`));
+  }
+  return rendered;
+};
+
+const readOptionalFile = async (filePath: string): Promise<string> => {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return "";
+  }
+};
+
+const runAiCommandTemplate = async (
+  template: string,
+  input: { cwd: string; prompt: string; phase: string },
+  onChunk: (chunk: string) => Promise<void>,
+) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "vibe-bridge-ai-"));
+  const promptFile = path.join(tempDir, "prompt.txt");
+  const outputFile = path.join(tempDir, "output.txt");
+  try {
+    await fs.writeFile(promptFile, input.prompt, "utf8");
+    const command = renderCommandTemplate(template, { ...input, promptFile, outputFile });
+    const completed = await runShell(command, input.cwd, onChunk);
+    const output = (await readOptionalFile(outputFile)) || completed.stdout;
+    return { ...completed, output };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => null);
+  }
+};
+
+const resolveCodexAppServerRemote = async (config: RunnerConfig, cwd: string): Promise<string> => {
+  if (config.codexAppServerRemote) return config.codexAppServerRemote;
+  const codexBin = config.codexBin || "codex";
+  await runExec([codexBin, "app-server", "daemon", "start"], cwd);
+  const version = await runExec([codexBin, "app-server", "daemon", "version"], cwd);
+  const parsed = safeJsonParse(version.stdout);
+  const socketPath = asRecord(parsed) ? getString(asRecord(parsed)?.socketPath) : undefined;
+  if (!socketPath) {
+    throw new Error("Codex app-server daemon did not report a socketPath");
+  }
+  return `unix://${socketPath}`;
+};
+
+const runCodexAi = async (
+  backend: "codex-cli" | "codex-app-server",
+  job: JobSpec,
+  config: RunnerConfig,
+  input: { cwd: string; prompt: string; phase: "plan" | "execute" },
+  onChunk: (chunk: string) => Promise<void>,
+) => {
+  const params = asRecord(job.params) ?? {};
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "vibe-bridge-codex-"));
+  const outputFile = path.join(tempDir, "last-message.txt");
+  try {
+    const codexBin = config.codexBin || getString(params.codexBin) || "codex";
+    const approvalPolicy = getString(params.approvalPolicy) || "never";
+    const sandbox = getString(params.sandbox) || (input.phase === "execute" ? "workspace-write" : "read-only");
+    const args = [
+      codexBin,
+      ...(backend === "codex-app-server"
+        ? ["--remote", await resolveCodexAppServerRemote(config, input.cwd)]
+        : []),
+      "exec",
+      "--ask-for-approval",
+      approvalPolicy,
+      "--sandbox",
+      sandbox,
+      "--skip-git-repo-check",
+      "-C",
+      input.cwd,
+      "--output-last-message",
+      outputFile,
+    ];
+    const model = getString(params.model) || getString(params.codexModel);
+    if (model) args.push("--model", model);
+    const profile = getString(params.profile) || getString(params.codexProfile);
+    if (profile) args.push("--profile", profile);
+    args.push(input.prompt);
+    const completed = await runExec(args, input.cwd, undefined, onChunk);
+    const output = (await readOptionalFile(outputFile)) || completed.stdout;
+    return { ...completed, output };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => null);
+  }
+};
+
+const executeAiJob = async (job: JobSpec, config: RunnerConfig): Promise<JobResult> => {
+  const phase = job.phase || "execute";
+  const { checkoutDir } = await ensureRepo(job, config.workspaceRoot);
+  const backend = resolveAiBackend(job, config);
+  const prompt = buildAiPrompt(job, phase);
+  await sendEvent(config, job, "status", `AI backend started: ${backend}`);
+
+  const outputChunks: string[] = [];
+  const onChunk = async (chunk: string) => {
+    outputChunks.push(chunk);
+    await sendEvent(config, job, "log", chunk);
+  };
+
+  try {
+    let code: number | null = 0;
+    let stdout = "";
+    let stderr = "";
+    let output = "";
+
+    if (backend === "local-llm") {
+      output = await requestChatCompletion([
+        { role: "system", content: "You are an automation worker. Return the requested result directly." },
+        { role: "user", content: prompt },
+      ]);
+      stdout = output;
+    } else if (backend === "codex-cli" || backend === "codex-app-server") {
+      const completed = await runCodexAi(backend, job, config, { cwd: checkoutDir, prompt, phase }, onChunk);
+      code = completed.code;
+      stdout = completed.stdout;
+      stderr = completed.stderr;
+      output = completed.output;
+    } else {
+      const template =
+        backend === "cursor-cli"
+          ? config.cursorCommand
+          : config.aiCommand;
+      if (!template) {
+        throw new Error(
+          backend === "cursor-cli"
+            ? "VIBE_BRIDGE_CURSOR_COMMAND is required for cursor-cli backend"
+            : "VIBE_BRIDGE_AI_COMMAND is required for command backend",
+        );
+      }
+      const completed = await runAiCommandTemplate(template, { cwd: checkoutDir, prompt, phase }, onChunk);
+      code = completed.code;
+      stdout = completed.stdout;
+      stderr = completed.stderr;
+      output = completed.output;
+    }
+
+    const status: JobResult["status"] = code === 0 ? "completed" : "failed";
+    const text = output || stdout || outputChunks.join("");
+    const artifactsInline: Record<string, string> =
+      phase === "plan"
+        ? { plan: text, aiBackend: backend }
+        : { response: text, aiBackend: backend };
+    const result: JobResult = {
+      jobId: job.id,
+      status,
+      finishedAt: nowIso(),
+      artifactsInline,
+      errorMessage: status === "failed" ? stderr || `AI backend failed with code ${code}` : undefined,
+    };
+    await sendEvent(config, job, "status", `AI backend finished: ${backend} (${status})`);
+    await completeJob(config, job, result);
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const result: JobResult = {
+      jobId: job.id,
+      status: "failed",
+      finishedAt: nowIso(),
+      artifactsInline: { aiBackend: backend },
+      errorMessage: message,
+    };
+    await sendEvent(config, job, "status", `AI backend failed: ${message}`).catch(() => null);
+    await completeJob(config, job, result);
+    return result;
+  }
+};
+
 const ensureRepo = async (job: JobSpec, workspaceRoot: string) => {
   if (!job.repo?.url) return { repoDir: workspaceRoot, checkoutDir: workspaceRoot };
   const repoDir = resolveRepoDir(workspaceRoot, job.repo.url, job.tenantId, job.projectId);
@@ -1053,6 +1289,9 @@ const resolveCommand = (job: JobSpec, phase: "plan" | "execute", config: RunnerC
 
 export const executeJob = async (job: JobSpec, config: RunnerConfig): Promise<JobResult> => {
   const jobKind = String(job.kind || "");
+  if (jobKind === "ai") {
+    return executeAiJob(job, config);
+  }
   if (jobKind === "vibeKanban" || jobKind.startsWith("vibeKanban.")) {
     return executeVibeKanbanJob(job, config);
   }
@@ -1419,6 +1658,11 @@ const loadEnvConfig = async (): Promise<RunnerConfig> => {
     filterTenantId: process.env.VIBE_BRIDGE_RUNNER_TENANT_ID || undefined,
     filterKinds: process.env.VIBE_BRIDGE_RUNNER_KINDS || undefined,
     filterPhases: process.env.VIBE_BRIDGE_RUNNER_PHASES || undefined,
+    defaultAiBackend: resolveEnv("VIBE_BRIDGE_AI_BACKEND"),
+    codexBin: resolveEnv("VIBE_BRIDGE_CODEX_BIN", "CODEX_BIN"),
+    codexAppServerRemote: resolveEnv("VIBE_BRIDGE_CODEX_APP_SERVER_REMOTE"),
+    cursorCommand: resolveEnv("VIBE_BRIDGE_CURSOR_COMMAND"),
+    aiCommand: resolveEnv("VIBE_BRIDGE_AI_COMMAND"),
     commandsRegistry,
     commandsStrict: process.env.VIBE_BRIDGE_COMMANDS_STRICT === "1",
   };

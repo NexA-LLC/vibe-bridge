@@ -27,6 +27,7 @@ Executors (local side):
 - MCP servers (local-only).
 - Vibe Kanban tasks.
 - CLI tools (codex, gemini, custom scripts).
+- AI backends (Codex CLI, Codex app-server, Cursor-style local CLI, OpenAI-compatible local LLM).
 
 Runner (customer environment):
 - Pulls jobs from the control plane.
@@ -132,6 +133,10 @@ Executor adapter examples:
 - `mcp`: talk to a local MCP server via stdio.
 - `vibe-kanban`: create/start tasks and pull results.
 - `cli`: spawn a local CLI and capture output.
+- `ai`: dispatch a prompt to a selected local AI backend through `params.aiBackend`.
+
+AI backend selection is runner-side configuration, not a protocol fork. The same `JobSpec` can target
+`codex-cli`, `codex-app-server`, `local-llm`, `cursor-cli`, or a custom command template.
 
 ## Security and Trust
 

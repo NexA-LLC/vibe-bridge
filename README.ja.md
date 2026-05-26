@@ -25,7 +25,7 @@ pull 型の control plane + runner です。
 ## Repo Layout
 
 - `apps/api`: control plane API（jobs / lease / logs / plan approval）
-- `apps/runner`: runner（CLI/MCP/Vibe Kanban 実行）
+- `apps/runner`: runner（CLI/MCP/Vibe Kanban/AI backend 実行）
 - `apps/brain-py`: Python brain runner（`kind=brain` の plan 生成）
 - `apps/web`: Web UI（将来用 / まだ薄い。現状は `apps/api` が `/ui` に簡易 Dev UI を同梱）
 - `packages/shared`: JobSpec/Result の型（TS）
@@ -69,3 +69,15 @@ Skeleton 〜 MVP 途中。ローカル単体テスト用に、API は `/ui` に�
 
 補足:
 - brain runner を使う場合、Node runner が `kind=brain` を掴まないように `VIBE_BRIDGE_RUNNER_KINDS` を設定すると安全です（例: `cli,mcp,vibeKanban,vibeKanban.mcp`）。
+
+## AI backend jobs
+
+`kind=ai` の Job は `params.aiBackend` で実行先を切り替えます。
+
+- `codex-cli`: Codex CLI の `codex exec` を実行
+- `codex-app-server`: ローカル Codex app-server daemon を起動/利用して `codex exec --remote ...` を実行
+- `local-llm`: OpenAI-compatible `/chat/completions` を実行
+- `cursor-cli`: runner 側の `VIBE_BRIDGE_CURSOR_COMMAND` テンプレートで実行
+- `command`: runner 側の `VIBE_BRIDGE_AI_COMMAND` テンプレートで任意のローカル agent を実行
+
+入力は `params.prompt` または `job.context` に置きます。`phase=plan` の出力は `artifactsInline.plan`、`phase=execute` の出力は `artifactsInline.response` に入ります。

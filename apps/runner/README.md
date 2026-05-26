@@ -20,6 +20,11 @@ Environment:
 - `VIBE_BRIDGE_LEASE_TTL_SEC` (default 300)
 - `VIBE_BRIDGE_PLAN_COMMAND` (optional default plan command)
 - `VIBE_BRIDGE_EXECUTE_COMMAND` (optional default execute command)
+- `VIBE_BRIDGE_AI_BACKEND` (optional default for `kind=ai`; `codex-cli`, `codex-app-server`, `local-llm`, `cursor-cli`, or `command`)
+- `VIBE_BRIDGE_CODEX_BIN` (optional; default `codex`)
+- `VIBE_BRIDGE_CODEX_APP_SERVER_REMOTE` (optional; if omitted, the runner starts the local Codex app-server daemon and uses its Unix socket)
+- `VIBE_BRIDGE_CURSOR_COMMAND` (required for `aiBackend=cursor-cli`; shell template with `{{cwd}}`, `{{promptFile}}`, `{{outputFile}}`, `{{prompt}}`, `{{phase}}`)
+- `VIBE_BRIDGE_AI_COMMAND` (required for `aiBackend=command`; same template placeholders)
 - `VIBE_BRIDGE_VIBE_KANBAN_BASE_URL` (optional, e.g. `http://127.0.0.1:3001`)
 - `VIBE_BRIDGE_LLM_BASE_URL` / `VIBE_BRIDGE_LLM_API_KEY` / `VIBE_BRIDGE_LLM_MODEL` (optional; OpenAI-compatible `/chat/completions`)
 - `VIBE_BRIDGE_LLM_TIMEOUT_MS` (default 20000)
@@ -48,3 +53,11 @@ Callbacks (optional):
 Flowlog moyatto hook (optional):
 - When the job includes `params.flowlog.userEmail`, the runner generates 1-3 “moyatto” candidates after `create_task`.
 - Candidates are stored in `result.artifactsInline.moyattoCandidates` (JSON string). A Flowlog-side callback handler can persist them as manual items.
+
+AI executor flow (job kind `ai`):
+- Set `params.aiBackend` to `codex-cli`, `codex-app-server`, `local-llm`, `cursor-cli`, or `command`.
+- Put the task in `params.prompt` or `job.context`.
+- `phase=plan` stores the backend output in `result.artifactsInline.plan`.
+- `phase=execute` stores the backend output in `result.artifactsInline.response`.
+- `codex-cli` runs `codex exec` directly. `codex-app-server` starts/uses the local Codex app-server daemon and passes `--remote unix://...` to `codex exec`.
+- `cursor-cli` and `command` are intentionally template-based because Cursor/headless local agents vary by install.

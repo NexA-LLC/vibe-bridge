@@ -10,7 +10,7 @@
 
 - **Source（例: FlowAlign）**: Job を作る側（UI/業務フローの入口）
 - **Control Plane API（`apps/api` / Node）**: Job の作成・貸出（lease）・状態管理・plan 保存/承認・webhook を担当
-- **Runner（`apps/runner` / Node）**: `GET /jobs/next` で job を pull し、ローカルで実行して結果を返す
+- **Runner（`apps/runner` / Node）**: `GET /jobs/next` で job を pull し、ローカルで CLI / Vibe Kanban / AI backend を実行して結果を返す
 - **Brain Runner（`apps/brain-py` / Python / 任意）**: `kind=brain` の `phase=plan` を pull して LLM で plan を生成する
 - **Local executors**: MCP servers / CLI tools / Vibe Kanban backend など
 
@@ -28,6 +28,7 @@ flowchart LR
     Brain["Brain runner (optional)\napps/brain-py (Python)"]
     MCP["MCP servers (local)"]
     CLI["CLI tools (local)"]
+    AI["AI backends\nCodex CLI / Codex app-server / local LLM / Cursor"]
     VK["Vibe Kanban backend (local)"]
   end
 
@@ -43,6 +44,7 @@ flowchart LR
 
   Runner --> MCP
   Runner --> CLI
+  Runner --> AI
   Runner --> VK
 
   VBAPI -->|"plan webhook (optional)\nPLAN_WEBHOOK_URLS"| Source
@@ -115,6 +117,22 @@ sequenceDiagram
 - `POST /jobs/:id/complete`: 完了（result を確定）
 - `POST /jobs/:id/approve`: plan 承認（任意で execute job を生成）
 
+## AI backend（`kind=ai`）
+
+`kind=ai` は「Slack / webhook / SQS / API などの入口から作られた Job を、ローカルの AI 実行系に渡す」ための汎用 executor です。
+
+- 選択: `params.aiBackend`（または `VIBE_BRIDGE_AI_BACKEND`）
+- 対応:
+  - `codex-cli`: `codex exec`
+  - `codex-app-server`: Codex app-server daemon + `codex exec --remote ...`
+  - `local-llm`: OpenAI-compatible `/chat/completions`
+  - `cursor-cli`: `VIBE_BRIDGE_CURSOR_COMMAND` テンプレート
+  - `command`: `VIBE_BRIDGE_AI_COMMAND` テンプレート
+- 入力: `params.prompt` または `context`
+- 出力:
+  - `phase=plan`: `artifactsInline.plan`
+  - `phase=execute`: `artifactsInline.response`
+
 ## Plan → Execute のゲート（考え方）
 
 - `phase=plan` は「提案/下書き」を作るフェーズ
@@ -126,4 +144,3 @@ sequenceDiagram
 - runner は inbound port を開けない（`GET /jobs/next` の pull）
 - control plane は bearer token（`API_TOKEN`）で保護できる
 - webhook は control plane → Source への push（必要なら Source 側で token 検証）
-

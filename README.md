@@ -31,7 +31,7 @@ Read the deep concept doc here: `docs/CONCEPT.md`.
 ## Repo Layout
 
 - `apps/api`: control plane API (jobs, lease, auth, logs)
-- `apps/runner`: customer-side runner (polling, execution, upload)
+- `apps/runner`: customer-side runner (polling, execution, upload; CLI/Vibe Kanban/AI backend adapters)
 - `apps/brain-py`: optional Python brain runner (plan generation for `kind=brain`)
 - `apps/web`: web UI (future; dev UI is currently served by `apps/api` at `/ui`)
 - `packages/shared`: shared JobSpec/ResultSpec types
@@ -63,3 +63,7 @@ This repo is TypeScript-first. Build once, then run the API and runner.
 
 5) (Optional) Run Brain Runner (plan generation)
 - `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev python3 apps/brain-py/brain_runner.py`
+
+AI jobs:
+- Use `kind=ai` with `params.aiBackend=codex-cli|codex-app-server|local-llm|cursor-cli|command`.
+- `codex-cli` works with Codex CLI. `codex-app-server` uses the local Codex app-server daemon. `local-llm` calls an OpenAI-compatible `/chat/completions` endpoint. `cursor-cli` and `command` use explicit runner-side command templates.

@@ -67,7 +67,7 @@ flowchart LR
 - `tenantId`: FlowAlign tenantId
 - `projectId`: FlowAlign projectId（uuidv7）
 - `phase`: `plan` or `execute`
-- `kind`: 実行先（`mcp` / `cli` / `vibeKanban` / `vibeKanban.mcp`）
+- `kind`: 実行先（`mcp` / `cli` / `vibeKanban` / `vibeKanban.mcp` / `ai`）
 - `idempotencyKey`: **FlowAlign側の run ID + phase** で冪等化（Work あたり複数runを許容する）
 - `params`:
   - `source`: `"flowalign"`
@@ -84,6 +84,7 @@ flowchart LR
 - 実装例:
   - `kind=brain`: LLMで plan を生成する（例: `apps/brain-py`）
   - `kind=cli`: ローカルの plan コマンド（codex など）で plan を生成する（runner が実行）
+  - `kind=ai`: `params.aiBackend` で Codex CLI / Codex app-server / local LLM / Cursor 系 command などを切り替えて plan を生成する
 
 ### 4.3 execute フェーズ（コミットした作業のみ）
 - 入力: 承認済み plan（参照: `params.planJobId` / `params.planText`）
@@ -207,6 +208,7 @@ MCP と同じ層ではなく、**「誰が・どこで・何を実行するか�
 - **実行の責任分離**: FlowAlign は「何をするか（Work/Offer）」まで、実行は各社/各テナントの Runner が担当
 - **ローカルでの完結**: 外に出したくない情報・環境依存の処理・社内ツール連携は Runner 側で完結
 - **ワーカーの選択自由**: MCP/CLI/Vibe Kanban など、各社の運用に合わせてワーカーを選べる
+- **AI backend の選択自由**: Codex CLI、Codex app-server、Cursor 系 headless CLI、社内 local LLM などを runner 側の設定で切り替えられる
 - **運用の標準化**: JobSpec/ResultSpec を共通フォーマットにして、別ツール間の移植性を担保
 
 ### 9.2 MCP と違うレイヤー

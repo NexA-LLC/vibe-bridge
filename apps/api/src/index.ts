@@ -344,6 +344,7 @@ const DEV_UI_HTML = `<!doctype html>
               <option value="vibeKanban">vibeKanban</option>
               <option value="vibeKanban.mcp">vibeKanban.mcp</option>
               <option value="brain">brain</option>
+              <option value="ai">ai</option>
             </select>
           </label>
           <label>Phase
@@ -378,7 +379,7 @@ const DEV_UI_HTML = `<!doctype html>
           </label>
         </div>
         <label style="margin-top:12px;">Params JSON
-          <textarea id="params" class="mono" placeholder='{}'>{}</textarea>
+          <textarea id="params" class="mono" placeholder='{"aiBackend":"codex-cli","prompt":"..."}'>{}</textarea>
         </label>
         <div class="btns" style="margin-top:10px;">
           <button id="fillEcho">Fill: echo</button>
