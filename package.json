@@ -20,12 +20,17 @@
     "start:ingress:env": "node scripts/with-env.mjs -- node apps/ingress/dist/index.js",
     "start:runner": "node apps/runner/dist/index.js",
     "start:runner:env": "node scripts/with-env.mjs -- node apps/runner/dist/index.js",
+    "db:generate:dev": "drizzle-kit generate --config drizzle.config.ts",
+    "db:migrate:dev": "drizzle-kit migrate --config drizzle.config.ts",
+    "db:studio:dev": "drizzle-kit studio --config drizzle.config.ts",
     "lint": "echo 'lint not configured'",
     "test": "echo 'test not configured'"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
     "@types/pg": "^8.16.0",
+    "drizzle-kit": "^0.24.0",
+    "drizzle-orm": "^0.33.0",
     "typescript": "^5.5.4"
   }
 }

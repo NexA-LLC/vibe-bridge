@@ -11,11 +11,12 @@ Environment:
 - `PLAN_WEBHOOK_TOKEN` (optional bearer token for plan webhooks)
 - `PLAN_STORAGE_BACKEND` (optional, `memory` or `postgres`)
 - `PLAN_INLINE_MAX_CHARS` (optional, max chars to keep inline; `0` disables)
-- `PLAN_TABLE` (optional, default `vibe_bridge_plans`)
-- `DATABASE_URL` (required when `PLAN_STORAGE_BACKEND=postgres`)
+- `PLAN_TABLE` (fixed to `vibe_bridge_plans` when using Postgres)
+- `JOB_STORAGE_BACKEND` (optional, `memory` or `postgres`; default `memory`)
+- `DATABASE_URL` (required when `PLAN_STORAGE_BACKEND=postgres` or `JOB_STORAGE_BACKEND=postgres`)
 
 Notes:
-- When `PLAN_STORAGE_BACKEND=postgres`, the plan table must already exist. Create it via your normal human-run DB migration workflow (this repo avoids runtime DDL).
+- When Postgres storage is enabled, tables must already exist. Create them via the checked-in Drizzle migration and your normal human-run DB migration workflow; this API does not run runtime DDL.
 
 Endpoints:
 - `GET /ui` (minimal Dev UI for local testing)

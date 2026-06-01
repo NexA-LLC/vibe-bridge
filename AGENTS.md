@@ -67,15 +67,15 @@
 
 ## Database / Postgres
 
-- 現状の `vibe-bridge` は Drizzle schema / Drizzle migration scripts を持たない。`apps/api` は `PLAN_STORAGE_BACKEND=postgres` の場合に `pg` で既存 table を利用するだけで、runtime DDL は行わない。
+- `vibe-bridge` は Drizzle schema / migration を持つ。正本は `apps/api/src/db/schema.ts` と `drizzle/`。
+- `apps/api` は `PLAN_STORAGE_BACKEND=postgres` / `JOB_STORAGE_BACKEND=postgres` の場合に既存 table を利用する。runtime DDL は行わない。
 - AI エージェントは DB コマンド、手動 SQL / DDL / DML、本番 DB write を実行してはならない。
-- Postgres の schema 変更が必要になった場合は、先に Drizzle schema / migration 設定と scratch/dev scripts を追加し、上位 `AGENTS.md` の DB opt-in ルールに従うこと。
-- 追加すべき scripts の最低ライン:
+- migration 生成/適用は人間の明示承認がある場合のみ実行する。
+- 既存の `drizzle/*.sql` は編集・削除・再生成しない。schema変更が必要な場合は roll-forward の新規 migration で対応する。
+- 現在のDB関連 scripts:
   - `pnpm run db:generate:dev`
   - `pnpm run db:migrate:dev`
-  - `pnpm run db:reset:scratch`
-  - `pnpm run db:migrate:scratch`
-- 上記 scripts が実装され、repo の `AGENTS.md` で明示 opt-in されるまで、AI は migration 生成/適用を行わない。
+  - `pnpm run db:studio:dev`
 
 ## コミュニケーション（重要）
 - 誤解させたとか混乱させたとか言い訳しない. 間違ったことを伝えたなら何を間違ったのか,何も理解していないかなど正直に話す
