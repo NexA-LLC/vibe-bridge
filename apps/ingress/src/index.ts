@@ -190,7 +190,7 @@ const normalizeJobInput = (input: EnqueueInput, config: IngressConfig): Partial<
       getString(jobRecord.text) ||
       getString(jobRecord.message) ||
       getString(jobRecord.input);
-    const params = {
+    const params: Record<string, unknown> = {
       ...(asRecord(jobRecord.params) ?? {}),
       vibeBridgeIngress: sourceMeta,
     };
@@ -205,8 +205,8 @@ const normalizeJobInput = (input: EnqueueInput, config: IngressConfig): Partial<
       kind: (getString(jobRecord.kind) as JobSpec["kind"] | undefined) || config.defaultKind,
       phase: (getString(jobRecord.phase) as JobSpec["phase"] | undefined) || config.defaultPhase,
       projectId: getString(jobRecord.projectId),
-      repo: asRecord(jobRecord.repo) as JobSpec["repo"] | undefined,
-      commands: asRecord(jobRecord.commands) as JobSpec["commands"] | undefined,
+      repo: asRecord(jobRecord.repo) as unknown as JobSpec["repo"] | undefined,
+      commands: asRecord(jobRecord.commands) as unknown as JobSpec["commands"] | undefined,
       planOutputPath: getString(jobRecord.planOutputPath),
       context: getString(jobRecord.context) || prompt,
       params,
