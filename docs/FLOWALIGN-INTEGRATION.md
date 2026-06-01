@@ -84,7 +84,7 @@ flowchart LR
 - 実装例:
   - `kind=brain`: LLMで plan を生成する（例: `apps/brain-py`）
   - `kind=cli`: ローカルの plan コマンド（codex など）で plan を生成する（runner が実行）
-  - `kind=ai`: `params.aiBackend` で Codex CLI / Codex app-server / local LLM / Cursor 系 command などを切り替えて plan を生成する
+  - `kind=ai`: `params.aiBackend` で Codex CLI / Codex app-server / Cursor CLI/API / Claude Code / local LLM / 任意 command などを切り替えて plan を生成する
 
 ### 4.3 execute フェーズ（コミットした作業のみ）
 - 入力: 承認済み plan（参照: `params.planJobId` / `params.planText`）

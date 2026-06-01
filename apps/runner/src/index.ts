@@ -11,9 +11,17 @@ import type { JobEvent, JobResult, JobSpec } from "@vibe-bridge/shared";
 const MAX_EVENT_MESSAGE = 1800;
 
 type LlmMessage = { role: "system" | "user" | "assistant"; content: string };
-type LlmConfig = { baseUrl: string; apiKey: string; model: string; timeoutMs: number };
+type LlmConfig = { baseUrl: string; apiKey: string; model: string; timeoutMs: number; pathName: string };
 type MoyattoCandidate = { text: string; reason: string };
-type AiBackend = "codex-cli" | "codex-app-server" | "cursor-cli" | "local-llm" | "command";
+type AiBackend =
+  | "codex-cli"
+  | "codex-app-server"
+  | "cursor-cli"
+  | "cursor-api"
+  | "claude-code"
+  | "local-llm"
+  | "openai-compatible"
+  | "command";
 
 type CommandSpec = {
   cwd?: string;
@@ -51,7 +59,9 @@ export interface RunnerConfig {
   defaultAiBackend?: string;
   codexBin?: string;
   codexAppServerRemote?: string;
+  cursorBin?: string;
   cursorCommand?: string;
+  claudeBin?: string;
   aiCommand?: string;
   commandsRegistry?: CommandRegistry;
   commandsStrict?: boolean;
@@ -624,25 +634,118 @@ const runFlowalignQueueOnce = async (config: RunnerConfig): Promise<boolean> => 
 };
 
 const normalizeLlmBaseUrl = (value: string) => value.replace(/\/$/, "");
-
-const getLlmConfig = (): LlmConfig => {
-  const baseUrl =
-    resolveEnv("VIBE_BRIDGE_LLM_BASE_URL", "FLOWLOG_LLM_BASE_URL", "NEXA_LLM_BASE_URL") ||
-    "http://127.0.0.1:1234/v1";
-  const apiKey = resolveEnv("VIBE_BRIDGE_LLM_API_KEY", "FLOWLOG_LLM_API_KEY", "NEXA_LLM_API_KEY") || "sk-local";
-  const model = resolveEnv("VIBE_BRIDGE_LLM_MODEL", "FLOWLOG_LLM_MODEL", "NEXA_LLM_MODEL") || "auto";
-  const timeoutMs =
-    getNumber(resolveEnv("VIBE_BRIDGE_LLM_TIMEOUT_MS", "FLOWLOG_LLM_TIMEOUT_MS")) ||
-    20000;
-  return { baseUrl: normalizeLlmBaseUrl(baseUrl), apiKey, model, timeoutMs };
+const normalizeChatPath = (value: string | undefined) => {
+  const pathName = (value || "/chat/completions").trim();
+  if (!pathName) return "/chat/completions";
+  return pathName.startsWith("/") ? pathName : `/${pathName}`;
 };
 
-const requestChatCompletion = async (messages: LlmMessage[], options: { temperature?: number } = {}) => {
-  const config = getLlmConfig();
+const getLlmConfig = (params?: Record<string, unknown>): LlmConfig => {
+  const baseUrl =
+    getString(params?.llmBaseUrl) ||
+    getString(params?.baseUrl) ||
+    resolveEnv("VIBE_BRIDGE_LLM_BASE_URL", "FLOWLOG_LLM_BASE_URL", "NEXA_LLM_BASE_URL") ||
+    "http://127.0.0.1:1234/v1";
+  const apiKey =
+    getString(params?.llmApiKey) ||
+    getString(params?.apiKey) ||
+    resolveEnv("VIBE_BRIDGE_LLM_API_KEY", "FLOWLOG_LLM_API_KEY", "NEXA_LLM_API_KEY") ||
+    "sk-local";
+  const model =
+    getString(params?.llmModel) ||
+    getString(params?.model) ||
+    resolveEnv("VIBE_BRIDGE_LLM_MODEL", "FLOWLOG_LLM_MODEL", "NEXA_LLM_MODEL") ||
+    "auto";
+  const timeoutMs =
+    getNumber(params?.llmTimeoutMs) ||
+    getNumber(params?.timeoutMs) ||
+    getNumber(resolveEnv("VIBE_BRIDGE_LLM_TIMEOUT_MS", "FLOWLOG_LLM_TIMEOUT_MS")) ||
+    20000;
+  return {
+    baseUrl: normalizeLlmBaseUrl(baseUrl),
+    apiKey,
+    model,
+    timeoutMs,
+    pathName: normalizeChatPath(getString(params?.llmPath) || getString(params?.pathName)),
+  };
+};
+
+const getOpenAiCompatibleConfig = (params?: Record<string, unknown>): LlmConfig => {
+  const baseUrl =
+    getString(params?.baseUrl) ||
+    getString(params?.openaiBaseUrl) ||
+    resolveEnv("VIBE_BRIDGE_OPENAI_BASE_URL", "OPENAI_BASE_URL") ||
+    "http://127.0.0.1:1234/v1";
+  const apiKey =
+    getString(params?.apiKey) ||
+    getString(params?.openaiApiKey) ||
+    resolveEnv("VIBE_BRIDGE_OPENAI_API_KEY", "OPENAI_API_KEY") ||
+    "sk-local";
+  const model =
+    getString(params?.model) ||
+    getString(params?.openaiModel) ||
+    resolveEnv("VIBE_BRIDGE_OPENAI_MODEL", "OPENAI_MODEL") ||
+    "auto";
+  const timeoutMs =
+    getNumber(params?.timeoutMs) ||
+    getNumber(params?.openaiTimeoutMs) ||
+    getNumber(resolveEnv("VIBE_BRIDGE_OPENAI_TIMEOUT_MS", "OPENAI_TIMEOUT_MS")) ||
+    20000;
+  return {
+    baseUrl: normalizeLlmBaseUrl(baseUrl),
+    apiKey,
+    model,
+    timeoutMs,
+    pathName: normalizeChatPath(getString(params?.pathName) || getString(params?.openaiPath)),
+  };
+};
+
+const getCursorApiConfig = (params?: Record<string, unknown>): LlmConfig => {
+  const baseUrl =
+    getString(params?.cursorBaseUrl) ||
+    getString(params?.baseUrl) ||
+    resolveEnv("VIBE_BRIDGE_CURSOR_API_BASE_URL", "CURSOR_API_BASE_URL") ||
+    "https://api.cursor.com/v1";
+  const apiKey =
+    getString(params?.cursorApiKey) ||
+    getString(params?.apiKey) ||
+    resolveEnv("VIBE_BRIDGE_CURSOR_API_KEY", "CURSOR_API_KEY") ||
+    "";
+  const model =
+    getString(params?.cursorModel) ||
+    getString(params?.model) ||
+    resolveEnv("VIBE_BRIDGE_CURSOR_API_MODEL", "CURSOR_MODEL") ||
+    "gpt-5";
+  const timeoutMs =
+    getNumber(params?.cursorTimeoutMs) ||
+    getNumber(params?.timeoutMs) ||
+    getNumber(resolveEnv("VIBE_BRIDGE_CURSOR_API_TIMEOUT_MS", "CURSOR_API_TIMEOUT_MS")) ||
+    20000;
+  return {
+    baseUrl: normalizeLlmBaseUrl(baseUrl),
+    apiKey,
+    model,
+    timeoutMs,
+    pathName: normalizeChatPath(getString(params?.cursorPath) || getString(params?.pathName)),
+  };
+};
+
+const getChatConfigForBackend = (backend: AiBackend, params?: Record<string, unknown>): LlmConfig => {
+  if (backend === "cursor-api") return getCursorApiConfig(params);
+  if (backend === "openai-compatible") return getOpenAiCompatibleConfig(params);
+  return getLlmConfig(params);
+};
+
+const requestChatCompletion = async (
+  messages: LlmMessage[],
+  options: { temperature?: number; config?: LlmConfig } = {},
+) => {
+  const config = options.config || getLlmConfig();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    if (!config.apiKey) throw new Error("Missing API key for chat completion backend");
+    const response = await fetch(`${config.baseUrl}${config.pathName}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
@@ -885,11 +988,30 @@ const runExec = async (
 
 const normalizeAiBackend = (value: string | undefined): AiBackend => {
   const normalized = (value || "codex-cli").trim().toLowerCase().replace(/_/g, "-");
+  const aliases: Record<string, AiBackend> = {
+    codex: "codex-cli",
+    "codex-app": "codex-app-server",
+    "cursor": "cursor-cli",
+    "cursor-agent": "cursor-cli",
+    "cursor-http": "cursor-api",
+    "claude": "claude-code",
+    "claude-cli": "claude-code",
+    "claude-code-cli": "claude-code",
+    llm: "local-llm",
+    "local-openai": "local-llm",
+    openai: "openai-compatible",
+    "openai-api": "openai-compatible",
+    "openai-compatible-api": "openai-compatible",
+  };
+  if (aliases[normalized]) return aliases[normalized];
   if (
     normalized === "codex-cli" ||
     normalized === "codex-app-server" ||
     normalized === "cursor-cli" ||
+    normalized === "cursor-api" ||
+    normalized === "claude-code" ||
     normalized === "local-llm" ||
+    normalized === "openai-compatible" ||
     normalized === "command"
   ) {
     return normalized;
@@ -1032,6 +1154,78 @@ const runCodexAi = async (
   }
 };
 
+const runCursorCliAi = async (
+  job: JobSpec,
+  config: RunnerConfig,
+  input: { cwd: string; prompt: string; phase: "plan" | "execute" },
+  onChunk: (chunk: string) => Promise<void>,
+) => {
+  const params = asRecord(job.params) ?? {};
+  if (config.cursorCommand) {
+    return runAiCommandTemplate(config.cursorCommand, input, onChunk);
+  }
+
+  const cursorBin = config.cursorBin || getString(params.cursorBin) || "cursor-agent";
+  const args = [
+    cursorBin,
+    "--print",
+    "--output-format",
+    getString(params.outputFormat) || getString(params.cursorOutputFormat) || "text",
+    "--trust",
+    "--workspace",
+    input.cwd,
+  ];
+  const model = getString(params.model) || getString(params.cursorModel);
+  if (model) args.push("--model", model);
+  const mode = getString(params.mode) || getString(params.cursorMode) || (input.phase === "plan" ? "plan" : undefined);
+  if (mode) args.push("--mode", mode);
+  const sandbox = getString(params.sandbox) || getString(params.cursorSandbox);
+  if (sandbox) args.push("--sandbox", sandbox);
+  if (params.force === true || params.cursorForce === true || params.yolo === true) args.push("--force");
+  args.push(input.prompt);
+  const completed = await runExec(args, input.cwd, undefined, onChunk);
+  return { ...completed, output: completed.stdout };
+};
+
+const runClaudeCodeAi = async (
+  job: JobSpec,
+  config: RunnerConfig,
+  input: { cwd: string; prompt: string; phase: "plan" | "execute" },
+  onChunk: (chunk: string) => Promise<void>,
+) => {
+  const params = asRecord(job.params) ?? {};
+  const claudeBin = config.claudeBin || getString(params.claudeBin) || "claude";
+  const args = [
+    claudeBin,
+    "--print",
+    "--output-format",
+    getString(params.outputFormat) || getString(params.claudeOutputFormat) || "text",
+  ];
+  const model = getString(params.model) || getString(params.claudeModel);
+  if (model) args.push("--model", model);
+  const permissionMode =
+    getString(params.permissionMode) ||
+    getString(params.claudePermissionMode) ||
+    (input.phase === "plan" ? "plan" : "acceptEdits");
+  if (permissionMode) args.push("--permission-mode", permissionMode);
+  const systemPrompt = getString(params.systemPrompt) || getString(params.claudeSystemPrompt);
+  if (systemPrompt) args.push("--system-prompt", systemPrompt);
+  const appendSystemPrompt = getString(params.appendSystemPrompt) || getString(params.claudeAppendSystemPrompt);
+  if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
+  const tools = getString(params.tools) || getString(params.claudeTools);
+  if (tools) args.push("--tools", tools);
+  const allowedTools = getString(params.allowedTools) || getString(params.claudeAllowedTools);
+  if (allowedTools) args.push("--allowedTools", allowedTools);
+  const disallowedTools = getString(params.disallowedTools) || getString(params.claudeDisallowedTools);
+  if (disallowedTools) args.push("--disallowedTools", disallowedTools);
+  if (params.dangerouslySkipPermissions === true || params.claudeDangerouslySkipPermissions === true) {
+    args.push("--dangerously-skip-permissions");
+  }
+  args.push(input.prompt);
+  const completed = await runExec(args, input.cwd, undefined, onChunk);
+  return { ...completed, output: completed.stdout };
+};
+
 const executeAiJob = async (job: JobSpec, config: RunnerConfig): Promise<JobResult> => {
   const phase = job.phase || "execute";
   const { checkoutDir } = await ensureRepo(job, config.workspaceRoot);
@@ -1051,11 +1245,12 @@ const executeAiJob = async (job: JobSpec, config: RunnerConfig): Promise<JobResu
     let stderr = "";
     let output = "";
 
-    if (backend === "local-llm") {
+    if (backend === "local-llm" || backend === "openai-compatible" || backend === "cursor-api") {
+      const params = asRecord(job.params) ?? {};
       output = await requestChatCompletion([
         { role: "system", content: "You are an automation worker. Return the requested result directly." },
         { role: "user", content: prompt },
-      ]);
+      ], { config: getChatConfigForBackend(backend, params) });
       stdout = output;
     } else if (backend === "codex-cli" || backend === "codex-app-server") {
       const completed = await runCodexAi(backend, job, config, { cwd: checkoutDir, prompt, phase }, onChunk);
@@ -1063,17 +1258,22 @@ const executeAiJob = async (job: JobSpec, config: RunnerConfig): Promise<JobResu
       stdout = completed.stdout;
       stderr = completed.stderr;
       output = completed.output;
+    } else if (backend === "cursor-cli") {
+      const completed = await runCursorCliAi(job, config, { cwd: checkoutDir, prompt, phase }, onChunk);
+      code = completed.code;
+      stdout = completed.stdout;
+      stderr = completed.stderr;
+      output = completed.output;
+    } else if (backend === "claude-code") {
+      const completed = await runClaudeCodeAi(job, config, { cwd: checkoutDir, prompt, phase }, onChunk);
+      code = completed.code;
+      stdout = completed.stdout;
+      stderr = completed.stderr;
+      output = completed.output;
     } else {
-      const template =
-        backend === "cursor-cli"
-          ? config.cursorCommand
-          : config.aiCommand;
+      const template = config.aiCommand;
       if (!template) {
-        throw new Error(
-          backend === "cursor-cli"
-            ? "VIBE_BRIDGE_CURSOR_COMMAND is required for cursor-cli backend"
-            : "VIBE_BRIDGE_AI_COMMAND is required for command backend",
-        );
+        throw new Error("VIBE_BRIDGE_AI_COMMAND is required for command backend");
       }
       const completed = await runAiCommandTemplate(template, { cwd: checkoutDir, prompt, phase }, onChunk);
       code = completed.code;
@@ -1661,7 +1861,9 @@ const loadEnvConfig = async (): Promise<RunnerConfig> => {
     defaultAiBackend: resolveEnv("VIBE_BRIDGE_AI_BACKEND"),
     codexBin: resolveEnv("VIBE_BRIDGE_CODEX_BIN", "CODEX_BIN"),
     codexAppServerRemote: resolveEnv("VIBE_BRIDGE_CODEX_APP_SERVER_REMOTE"),
+    cursorBin: resolveEnv("VIBE_BRIDGE_CURSOR_BIN", "CURSOR_BIN"),
     cursorCommand: resolveEnv("VIBE_BRIDGE_CURSOR_COMMAND"),
+    claudeBin: resolveEnv("VIBE_BRIDGE_CLAUDE_BIN", "CLAUDE_BIN"),
     aiCommand: resolveEnv("VIBE_BRIDGE_AI_COMMAND"),
     commandsRegistry,
     commandsStrict: process.env.VIBE_BRIDGE_COMMANDS_STRICT === "1",

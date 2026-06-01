@@ -379,7 +379,7 @@ const DEV_UI_HTML = `<!doctype html>
           </label>
         </div>
         <label style="margin-top:12px;">Params JSON
-          <textarea id="params" class="mono" placeholder='{"aiBackend":"codex-cli","prompt":"..."}'>{}</textarea>
+          <textarea id="params" class="mono" placeholder='{"aiBackend":"claude-code","prompt":"..."}'>{}</textarea>
         </label>
         <div class="btns" style="margin-top:10px;">
           <button id="fillEcho">Fill: echo</button>

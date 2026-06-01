@@ -1,8 +1,8 @@
 # Vibe Bridge（日本語）
 
-Vibe Bridge は、社内サービス（FlowAlign など）から「やってほしい作業」を **Job** として投入し、
-ローカル環境だけで動くツール（MCP / CLI / Vibe Kanban など）に **inbound port を開けず**に実行してもらうための、
-pull 型の control plane + runner です。
+Vibe Bridge は、クラウド側の workflow から「やってほしい作業」を **Job** として投入し、
+ローカル環境だけで動くツール（MCP / CLI / Vibe Kanban / Codex / Cursor / Claude Code / local LLM など）に
+**inbound port を開けず**に実行してもらうための、pull 型の control plane + runner です。
 
 ## これは Node 製？
 
@@ -76,8 +76,11 @@ Skeleton 〜 MVP 途中。ローカル単体テスト用に、API は `/ui` に�
 
 - `codex-cli`: Codex CLI の `codex exec` を実行
 - `codex-app-server`: ローカル Codex app-server daemon を起動/利用して `codex exec --remote ...` を実行
+- `cursor-cli`: Cursor Agent を `--print` で実行（`VIBE_BRIDGE_CURSOR_COMMAND` があればテンプレート実行）
+- `cursor-api`: Cursor/OpenAI-compatible な API endpoint を実行
+- `claude-code`: Claude Code を `claude --print` で実行
 - `local-llm`: OpenAI-compatible `/chat/completions` を実行
-- `cursor-cli`: runner 側の `VIBE_BRIDGE_CURSOR_COMMAND` テンプレートで実行
+- `openai-compatible`: 任意の OpenAI-compatible `/chat/completions` endpoint を実行
 - `command`: runner 側の `VIBE_BRIDGE_AI_COMMAND` テンプレートで任意のローカル agent を実行
 
 入力は `params.prompt` または `job.context` に置きます。`phase=plan` の出力は `artifactsInline.plan`、`phase=execute` の出力は `artifactsInline.response` に入ります。

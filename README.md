@@ -1,14 +1,15 @@
 # Vibe Bridge
 
-Vibe Bridge is a pull-based runner and control plane that bridges internal services to local-only tooling
-(MCP servers, Vibe Kanban, and CLIs) without opening inbound ports.
+Vibe Bridge is an outbound-only runner and control plane for connecting cloud workflows to local developer
+tooling without opening inbound ports. It can route jobs to MCP servers, CLIs, Vibe Kanban, Codex, Cursor,
+Claude Code, OpenAI-compatible local LLMs, or explicitly allowlisted commands.
 
 Japanese docs:
 - `README.ja.md`
 - `docs/ARCHITECTURE.ja.md`
 
-This repo is a Node/TypeScript-first monorepo. The runner lives in customer environments and polls for
-jobs; the control plane and web UI live in our infrastructure.
+This repo is a Node/TypeScript-first monorepo. The runner lives in the developer or customer environment and
+polls for jobs; the control plane and web UI can run anywhere reachable over outbound HTTPS.
 
 ## Concept
 
@@ -65,5 +66,9 @@ This repo is TypeScript-first. Build once, then run the API and runner.
 - `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev python3 apps/brain-py/brain_runner.py`
 
 AI jobs:
-- Use `kind=ai` with `params.aiBackend=codex-cli|codex-app-server|local-llm|cursor-cli|command`.
-- `codex-cli` works with Codex CLI. `codex-app-server` uses the local Codex app-server daemon. `local-llm` calls an OpenAI-compatible `/chat/completions` endpoint. `cursor-cli` and `command` use explicit runner-side command templates.
+- Use `kind=ai` with `params.aiBackend=codex-cli|codex-app-server|cursor-cli|cursor-api|claude-code|local-llm|openai-compatible|command`.
+- `codex-cli` runs Codex CLI. `codex-app-server` uses the local Codex app-server daemon. `cursor-cli` runs Cursor Agent locally, while `cursor-api` targets a configurable Cursor/OpenAI-compatible API endpoint. `claude-code` runs Claude Code in print mode. `local-llm` and `openai-compatible` call `/chat/completions`-style APIs. `command` runs an explicit runner-side command template.
+
+## License
+
+MIT

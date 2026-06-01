@@ -20,14 +20,14 @@ or other CLIs. The runner stays in the customer environment; the cloud only orch
 Vibe Bridge is a hub with adapters on both sides.
 
 Sources (cloud side):
-- Internal services that produce jobs (case systems, workflows, schedulers).
+- Internal services or OSS tools that produce jobs (case systems, workflows, schedulers, chatops).
 - A shared control plane API can normalize jobs from all sources.
 
 Executors (local side):
 - MCP servers (local-only).
 - Vibe Kanban tasks.
 - CLI tools (codex, gemini, custom scripts).
-- AI backends (Codex CLI, Codex app-server, Cursor-style local CLI, OpenAI-compatible local LLM).
+- AI backends (Codex CLI, Codex app-server, Cursor Agent/API, Claude Code, OpenAI-compatible local LLM).
 
 Runner (customer environment):
 - Pulls jobs from the control plane.
@@ -136,7 +136,8 @@ Executor adapter examples:
 - `ai`: dispatch a prompt to a selected local AI backend through `params.aiBackend`.
 
 AI backend selection is runner-side configuration, not a protocol fork. The same `JobSpec` can target
-`codex-cli`, `codex-app-server`, `local-llm`, `cursor-cli`, or a custom command template.
+`codex-cli`, `codex-app-server`, `cursor-cli`, `cursor-api`, `claude-code`, `local-llm`,
+`openai-compatible`, or a custom command template.
 
 ## Security and Trust
 

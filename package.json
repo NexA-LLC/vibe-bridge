@@ -1,6 +1,8 @@
 {
   "name": "vibe-bridge",
   "private": true,
+  "description": "Outbound-only runner and control plane for connecting cloud workflows to local developer tools.",
+  "license": "MIT",
   "version": "0.0.0",
   "workspaces": [
     "apps/*",

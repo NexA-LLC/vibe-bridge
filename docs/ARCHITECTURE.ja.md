@@ -125,8 +125,11 @@ sequenceDiagram
 - 対応:
   - `codex-cli`: `codex exec`
   - `codex-app-server`: Codex app-server daemon + `codex exec --remote ...`
+  - `cursor-cli`: `cursor-agent --print`
+  - `cursor-api`: Cursor/OpenAI-compatible API endpoint
+  - `claude-code`: `claude --print`
   - `local-llm`: OpenAI-compatible `/chat/completions`
-  - `cursor-cli`: `VIBE_BRIDGE_CURSOR_COMMAND` テンプレート
+  - `openai-compatible`: 任意の OpenAI-compatible `/chat/completions`
   - `command`: `VIBE_BRIDGE_AI_COMMAND` テンプレート
 - 入力: `params.prompt` または `context`
 - 出力:
