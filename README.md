@@ -8,6 +8,8 @@ Japanese docs:
 - `README.ja.md`
 - `docs/ARCHITECTURE.ja.md`
 - `docs/INGRESS.md`
+- `SECURITY.md`
+- `docs/THREAT_MODEL.md`
 
 This repo is a Node/TypeScript-first monorepo. The runner lives in the developer or customer environment and
 polls for jobs; the control plane and web UI can run anywhere reachable over outbound HTTPS.
@@ -29,6 +31,7 @@ Read the deep concept doc here: `docs/CONCEPT.md`.
 - Thin runner. It only leases jobs, executes via adapters (MCP/CLI), and reports results.
 - Protocol first. JobSpec/ResultSpec are stable so we can add Python brains later.
 - Clear trust boundary. Secrets stay on the runner host; only outbound HTTPS is required.
+- Plan before execute. External inputs should default to `phase=plan`; execution should be approved or scoped.
 
 ## Repo Layout
 
@@ -43,6 +46,12 @@ Read the deep concept doc here: `docs/CONCEPT.md`.
 ## Status
 
 Early MVP. API + runner work for local dev; the API serves a minimal Dev UI at `/ui`.
+
+## Security
+
+Vibe Bridge can execute local developer tools, so deployments should be treated
+as local execution infrastructure. Start with [SECURITY.md](SECURITY.md) and the
+[threat model](docs/THREAT_MODEL.md) before exposing ingress adapters or tunnels.
 
 ## Quickstart (dev)
 

@@ -23,6 +23,18 @@ Vibe Bridge は、クラウド側の workflow から「やってほしい作業�
 - `docs/ARCHITECTURE.ja.md`
 - `docs/INGRESS.md`
 - FlowAlign 連携: `docs/FLOWALIGN-INTEGRATION.md`（日本語）
+- `SECURITY.md`
+- `docs/THREAT_MODEL.md`
+
+## セキュリティ
+
+Vibe Bridge はローカルの開発者ツールを実行できるため、単なる webhook relay ではなく
+local execution infrastructure として扱う必要があります。
+
+- 外部入力は原則 `phase=plan` にする。
+- `phase=execute` は承認済み、または runner 側で tenant/kind/phase/command を絞った状態で実行する。
+- 公開 tunnel/ngrok/Cloudflare Tunnel は ingress process のみに向け、runner は inbound 公開しない。
+- 詳細は `SECURITY.md` と `docs/THREAT_MODEL.md` を参照。
 
 ## Repo Layout
 
