@@ -4,6 +4,31 @@ Vibe Bridge は、クラウド側の workflow から「やってほしい作業�
 ローカル環境だけで動くツール（MCP / CLI / Vibe Kanban / Codex / Cursor / Claude Code / local LLM など）に
 **inbound port を開けず**に実行してもらうための、pull 型の control plane + runner です。
 
+実用上は、クラウドアプリ、Slack/LINE、SQS、Webhook などが「この作業をして」と依頼し、
+実際の作業は開発者のローカルマシン上の runner が Codex / Cursor / Claude Code / MCP / CLI を使って実行します。
+
+## 何を解くもの？
+
+便利な開発者ツールほど、ローカルの repo、認証済みCLI、エディタ、MCP server、秘密情報に近い場所で動きます。
+ただし、そのローカルマシンに inbound port を開けるのは危険です。
+
+Vibe Bridge は runner を pull 型にします。
+
+```text
+external source -> control plane job queue <- local runner -> local tools
+```
+
+Source は runner に直接接続しません。Runner が outbound HTTPS で Job を lease し、
+ローカルで実行して、status / logs / plan / result を control plane に返します。
+
+## 代表的な使い方
+
+- workflow system から Codex / Cursor / Claude Code / local LLM を起動する。
+- Slack / LINE / SQS / WebSocket / webhook の入力を plan job に変換する。
+- private repo を control plane にアップロードせず、ローカル runner 側で作業する。
+- まず plan を作り、人間が確認してから execute job に進める。
+- allowlist 済み command や MCP / Vibe Kanban adapter に job を流す。
+
 ## これは Node 製？
 
 はい。現状のコアは **Node.js / TypeScript** です。
@@ -101,3 +126,44 @@ Skeleton 〜 MVP 途中。ローカル単体テスト用に、API は `/ui` に�
 - `command`: runner 側の `VIBE_BRIDGE_AI_COMMAND` テンプレートで任意のローカル agent を実行
 
 入力は `params.prompt` または `job.context` に置きます。`phase=plan` の出力は `artifactsInline.plan`、`phase=execute` の出力は `artifactsInline.response` に入ります。
+
+## Job を作る例
+
+API 起動後、次のように plan job を作れます。
+
+```bash
+curl -sS http://127.0.0.1:3900/jobs \
+  -H 'Authorization: Bearer dev' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tenantId": "default",
+    "kind": "ai",
+    "phase": "plan",
+    "context": "Inspect this repository and propose a safe README improvement.",
+    "params": {
+      "prompt": "Inspect this repository and propose a safe README improvement.",
+      "aiBackend": "codex-cli"
+    }
+  }'
+```
+
+runner は plan job に絞って起動します。
+
+```bash
+VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 \
+VIBE_BRIDGE_API_TOKEN=dev \
+VIBE_BRIDGE_WORKSPACE_ROOT=~/.vibe-bridge/work \
+VIBE_BRIDGE_RUNNER_PHASES=plan \
+pnpm run start:runner
+```
+
+`http://127.0.0.1:3900/ui` で job、runner event、plan output を確認できます。
+
+## demo 時の安全な初期設定
+
+- 外部入力は `phase=plan` にする。
+- ngrok / Cloudflare Tunnel は `apps/ingress` のみに向ける。
+- generic webhook には `VIBE_BRIDGE_INGRESS_TOKEN` を設定する。
+- Slack / LINE は signing secret を設定してから有効化する。
+- command 実行を使う前に `VIBE_BRIDGE_COMMANDS_STRICT=1` を設定する。
+- runner は `VIBE_BRIDGE_RUNNER_TENANT_ID`、`VIBE_BRIDGE_RUNNER_KINDS`、`VIBE_BRIDGE_RUNNER_PHASES` で絞る。
