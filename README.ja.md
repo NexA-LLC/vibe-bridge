@@ -9,6 +9,7 @@ Vibe Bridge は、クラウド側の workflow から「やってほしい作業�
 はい。現状のコアは **Node.js / TypeScript** です。
 
 - `apps/api`: Control Plane API（Node）
+- `apps/ingress`: 入力 adapter（Webhook / Slack / LINE / SQS / WebSocket）
 - `apps/runner`: ローカル runner（Node）
 - `apps/brain-py`: 追加の “brain runner”（Python / 任意）
 
@@ -20,6 +21,7 @@ Vibe Bridge は、クラウド側の workflow から「やってほしい作業�
 
 詳細（Mermaid図つき）:
 - `docs/ARCHITECTURE.ja.md`
+- `docs/INGRESS.md`
 - FlowAlign 連携: `docs/FLOWALIGN-INTEGRATION.md`（日本語）
 
 ## Repo Layout
@@ -53,7 +55,10 @@ Skeleton 〜 MVP 途中。ローカル単体テスト用に、API は `/ui` に�
 3.5) Dev UI を開く
 - `http://127.0.0.1:3900/ui`（`API_TOKEN=dev` の場合は UI 側の Token に `dev` を入れる）
 
-4) Node runner 起動（CLI/MCP/Vibe Kanban 実行用）
+4) （任意）Ingress 起動（Webhook / Slack / LINE / SQS / WebSocket 入力用）
+- `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_INGRESS_SOURCES=webhook pnpm run start:ingress`
+
+5) Node runner 起動（CLI/MCP/Vibe Kanban 実行用）
 - `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev VIBE_BRIDGE_WORKSPACE_ROOT=/absolute/path pnpm run start:runner`
 
 （`.env` で起動したい場合）
@@ -64,7 +69,7 @@ Skeleton 〜 MVP 途中。ローカル単体テスト用に、API は `/ui` に�
 - `VIBE_BRIDGE_WORKSPACE_ROOT` は runner の作業用ディレクトリです（ログ/生成物/一時ファイル等）。
 - 一般には **ユーザー配下の固定ディレクトリ**（例: `~/.vibe-bridge/work`）が無難です。`/tmp` は掃除されることがあるので非推奨です。
 
-5) （任意）Python brain runner 起動（plan 生成用）
+6) （任意）Python brain runner 起動（plan 生成用）
 - `VIBE_BRIDGE_API_BASE=http://127.0.0.1:3900 VIBE_BRIDGE_API_TOKEN=dev python3 apps/brain-py/brain_runner.py`
 
 補足:

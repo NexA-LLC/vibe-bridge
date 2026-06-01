@@ -16,6 +16,8 @@
     "build:watch": "tsc -b -w",
     "start:api": "node apps/api/dist/index.js",
     "start:api:env": "node scripts/with-env.mjs -- node apps/api/dist/index.js",
+    "start:ingress": "node apps/ingress/dist/index.js",
+    "start:ingress:env": "node scripts/with-env.mjs -- node apps/ingress/dist/index.js",
     "start:runner": "node apps/runner/dist/index.js",
     "start:runner:env": "node scripts/with-env.mjs -- node apps/runner/dist/index.js",
     "lint": "echo 'lint not configured'",

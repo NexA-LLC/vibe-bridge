@@ -22,6 +22,7 @@ Vibe Bridge is a hub with adapters on both sides.
 Sources (cloud side):
 - Internal services or OSS tools that produce jobs (case systems, workflows, schedulers, chatops).
 - A shared control plane API can normalize jobs from all sources.
+- Optional ingress adapters can receive webhook, Slack, LINE, SQS, or WebSocket messages and enqueue JobSpecs.
 
 Executors (local side):
 - MCP servers (local-only).
@@ -35,6 +36,11 @@ Runner (customer environment):
 
 Web UI (cloud side):
 - Runner enrollment, job history, logs, and diagnostics.
+
+Ingress (source side):
+- Accepts inbound events from providers that cannot call `POST /jobs` directly.
+- Runs locally with a tunnel for development, or as a small deployed service for production.
+- Converts provider payloads into stable JobSpec-shaped jobs.
 
 ## Core Loop
 

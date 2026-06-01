@@ -3,7 +3,7 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./apps/api" },
+    { "path": "./apps/ingress" },
     { "path": "./apps/runner" }
   ]
 }
-
